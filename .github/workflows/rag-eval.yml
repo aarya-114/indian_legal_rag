@@ -41,7 +41,7 @@ jobs:
             data/eval/eval_results.json
 
       - name: Upload eval results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: eval-results
