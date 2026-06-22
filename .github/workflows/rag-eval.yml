@@ -6,56 +6,39 @@ on:
   push:
     branches: [main]
 
-
 jobs:
-
   evaluate:
-
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout code
         uses: actions/checkout@v4
 
-
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: "3.12"
 
-
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-
+        run: pip install -r requirements.txt
 
       - name: Cache ChromaDB
-        uses: actions/cache@v4
+        uses: actions/cache@v3
         with:
           path: data/chroma_db
           key: chroma-${{ hashFiles('data/processed/chunks.json') }}
-
-
-      - name: Build vector database
-        run: |
-          PYTHONPATH=. python src/ingestion/create_embeddings.py
-
 
       - name: Run eval pipeline
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-
         run: |
           PYTHONPATH=. python src/evaluation/eval_runner.py
-
 
       - name: Run score gate
         run: |
           PYTHONPATH=. python src/evaluation/score_gate.py \
-          data/eval/eval_results.json
-
+            data/eval/eval_results.json
 
       - name: Upload eval results
         uses: actions/upload-artifact@v4
