@@ -1,0 +1,174 @@
+{
+  "summary": {
+    "total_questions": 10,
+    "avg_relevance": 0.718,
+    "avg_faithfulness": 0.842,
+    "avg_answer_overlap": 0.161,
+    "avg_latency_ms": 11136.37,
+    "self_heal_rate": 0.0,
+    "self_heal_count": 0,
+    "pass": true
+  },
+  "results": [
+    {
+      "question": "What are the conditions for granting anticipatory bail?",
+      "ground_truth": "The court must consider the nature and gravity of the accusation, the antecedents of the applicant, the possibility of the applicant fleeing justice, and whether the accusation is made with intent to humiliate the applicant.",
+      "answer": "Based on the provided legal sources, the conditions for granting anticipatory bail are as follows:\n\n1. The Court must consider the nature and seriousness of the proposed charges [Source 2: R.L. Jalappa vs Delhi Police Establishment on 12 May, 1988 (High_Court, 1988)].\n2. The Court must consider the context of the events likely to lead to the making of the charges [Source 2: R.L. Jalappa vs Delhi Police Establishment on 12 May, 1988 (High_Court, 1988)].\n3. The Court must consider a reasonable possibility of the applicant's presence not being secured at the trial [Source 2: R.L. Jalappa vs Delhi Police Establishment on 12 May, 1988 (High_Court, 1988)].\n4. The Court must consider a reasonable apprehension that witnesses will be tampered with [Source 2: R.L. Jalappa vs Delhi Police Establishment on 12 May, 1988 (High_Court, 1988)].\n5. The Court must consider the larger interests of the public or the State [Source 2: R.L. Jalappa vs Delhi Police Establishment on 12 May, 1988 (High_Court, 1988)].\n6. The Court must consider whether a legitimate case for the remand of the offender to the police custody under Section 167(2) of the Code is made out by the investigating agency [Source 3: R.L. Jalappa vs Delhi Police Establishment on 12 May, 1988 (High_Court, 1988)].\n7. The Court must consider whether there are special or exceptional circumstances for the grant of anticipatory bail [Source 3: R.L. Jalappa vs Delhi Police Establishment on 12 May, 1988 (High_Court, 1988)].\n8. The gravity of the offence is an important factor to be taken into consideration while granting such anticipatory bail [Source 4: Sri H D Kumaraswamy vs State Of Karnataka on 8 June, 2012 (High_Court, 2012)].\n9. The need for custodial interrogation is also a factor to be considered [Source 4: Sri H D Kumaraswamy vs State Of Karnataka on 8 June, 2012 (High_Court, 2012)].\n\nAdditionally, the Court has the power to grant anticipatory bail in non-bailable offences under Section 438 of Cr.P.C. even when cognizance is taken or a charge-sheet is filed, provided the facts of the case require the court to do so [Source 5: Sri H D Kumaraswamy vs State Of Karnataka on 8 June, 2012 (High_Court, 2012)].",
+      "expected_case_type": "Criminal",
+      "detected_intent": "Criminal",
+      "scores": {
+        "relevance": 0.727,
+        "faithfulness": 0.741,
+        "answer_overlap": 0.119
+      },
+      "self_healed": false,
+      "latency_ms": 5062.12,
+      "sources_count": 2,
+      "warning": null
+    },
+    {
+      "question": "How is market value determined in land acquisition cases?",
+      "ground_truth": "Market value is determined based on the price the land would fetch if sold in the open market on the date of publication of the notification under Section 4 of the Land Acquisition Act.",
+      "answer": "To determine the market value in land acquisition cases, the following principles are to be considered:\n\n1. The market value of the acquired land with building potentiality is to be fixed on the basis of evidence of price of small plots. A hypothetical lay-out of the plots of the acquired lands itself is required to be prepared for this purpose. [Source 1]\n2. The market value of land under acquisition has to be determined as on the crucial date of publication of the notification under Section 4 of the Land Acquisition Act. [Source 2]\n3. The determination has to be made standing on the date line of valuation (date of publication of notification under Section 4) as if the valuer is a hypothetical purchaser willing to purchase land from the open market and is prepared to pay a reasonable price as on that day. [Source 2]\n4. The Collector shall take into account the potential value of the land, the sale deeds of the lands situated in the vicinity, comparable benefits and advantages, and rentals prevailing in the neighbourhood, capitalising with appropriate multipliers of number of years' interest. [Source 3]\n5. The market value is to be assessed not merely by existing utility of the land but the best use to which a willing purchaser would like to put it. [Source 4]\n6. The market value is to be taken into account as on the date of the publication of the declaration under Section 6 of the Land Acquisition Act, and any decrease in market value between the publication of the notification or declaration and the actual acquisition will fall on the owner and other persons interested in the land. [Source 5]\n\nThese principles are to be considered for determining the market value in land acquisition cases.",
+      "expected_case_type": "Land&Property",
+      "detected_intent": "Land&Property",
+      "scores": {
+        "relevance": 0.849,
+        "faithfulness": 1.0,
+        "answer_overlap": 0.215
+      },
+      "self_healed": false,
+      "latency_ms": 5531.62,
+      "sources_count": 4,
+      "warning": null
+    },
+    {
+      "question": "Can an employee approach court if dismissed without following natural justice?",
+      "ground_truth": "Yes. If dismissal is in violation of principles of natural justice or mandatory statutory provisions, the employee can approach the court and the dismissal can be declared void and inoperative.",
+      "answer": "An employee can approach the court if dismissed without following natural justice. \n\nAccording to [Source 1], when the order of dismissal or discharge is void and inoperative, there is no limitation for instituting a suit for declaration by the dismissed employee. The High Court held that if the dismissal, discharge, or termination of service of an employee was illegal, unconstitutional, or against the principles of natural justice, the employee could approach the Court any time seeking declaration that he remained in service.\n\nIn [Source 2], the High Court observed that the principles of natural justice were violated when a permanent employee's service was dispensed with without following the principles of natural justice. This supports the idea that an employee can approach the court if dismissed without following natural justice.\n\nIn [Source 3], the High Court held that when the order of dismissal or discharge is void and inoperative, there is no limitation for instituting a suit for declaration by the dismissed employee. This further supports the idea that an employee can approach the court if dismissed without following natural justice.\n\nIn [Source 4], the House of Lords held that a lecturer had a right to be heard before being dismissed as he was holding an office, which was against the principles of natural justice. This case supports the idea that an employee has a right to be heard before being dismissed.\n\nIn [Source 5], the Supreme Court held that even if the master wrongfully dismissed the servant, the employment is effectively terminated. However, this case does not directly address the issue of approaching the court if dismissed without following natural justice.\n\nTherefore, based on the provided sources, an employee can approach the court if dismissed without following natural justice.",
+      "expected_case_type": "Industrial&Labour",
+      "detected_intent": "Industrial&Labour",
+      "scores": {
+        "relevance": 0.593,
+        "faithfulness": 1.0,
+        "answer_overlap": 0.163
+      },
+      "self_healed": false,
+      "latency_ms": 1500.17,
+      "sources_count": 3,
+      "warning": null
+    },
+    {
+      "question": "What is solatium in land acquisition compensation?",
+      "ground_truth": "Solatium is an additional amount of 30% on the market value awarded to the land owner as compensation for the compulsory nature of the acquisition.",
+      "answer": "Solatium in land acquisition compensation is part of compensation under the provisions of the Land Acquisition Act. This is as held by their Lordships of the Supreme Court in Union of India v. Ram Mehar [Source 1: Mawahedduddin And Ors. vs The Collector, Hyderabad on 23 Dec (High_Court, 1983)].\n\nThe payment of solatium is intended as a solace to make amends for the disinclination to part with possession of the land [Source 4: Mawahedduddin And Ors. vs The Collector, Hyderabad on 23 Dec (High_Court, 1983)].\n\nDenial of solatium as part of just compensation is obnoxious to the equality clause enshrined under Article 14 of the Constitution of India [Source 4: Mawahedduddin And Ors. vs The Collector, Hyderabad on 23 Dec (High_Court, 1983)].\n\nThe rate of solatium is 15% of the market value [Source 3: Mawahedduddin And Ors. vs The Collector, Hyderabad on 23 Dec (High_Court, 1983)].\n\nHowever, it is worth noting that the sources do not explicitly state the exact provision under the Land Acquisition Act that mandates the payment of solatium.",
+      "expected_case_type": "Land&Property",
+      "detected_intent": "Land&Property",
+      "scores": {
+        "relevance": 0.781,
+        "faithfulness": 0.733,
+        "answer_overlap": 0.156
+      },
+      "self_healed": false,
+      "latency_ms": 9124.87,
+      "sources_count": 2,
+      "warning": null
+    },
+    {
+      "question": "Under what circumstances can anticipatory bail be cancelled?",
+      "ground_truth": "Anticipatory bail can be cancelled if the accused misuses the liberty, tampers with evidence, threatens witnesses, or if new facts emerge that make custodial interrogation necessary.",
+      "answer": "Under what circumstances can anticipatory bail be cancelled?\n\nAccording to [Source 1: M.P. Ramesh And Others vs State Of Karnataka on 16 July, 199 (High_Court, 1990)], anticipatory bail can be cancelled under Section 437(5) or S. 439(2) on the following grounds:\n\n1. Interference or attempt to interfere with the due course of administration of justice.\n2. Evasion or attempt to evade the course of justice.\n3. Abuse of the liberty granted to him.\n\nAdditionally, [Source 4: M.P. Ramesh And Others vs State Of Karnataka on 16 July, 199 (High_Court, 1990)] states that an order for release on bail made under the proviso to S. 167(2) can be cancelled under Section 437(5) or S. 439(2).\n\nIt is also mentioned in [Source 1: M.P. Ramesh And Others vs State Of Karnataka on 16 July, 199 (High_Court, 1990)] that the order for release on bail may be cancelled if the witnesses who had turned hostile during the course of the trial have been won over by the accused on bail.\n\nTherefore, the circumstances under which anticipatory bail can be cancelled are:\n\n- Interference or attempt to interfere with the due course of administration of justice.\n- Evasion or attempt to evade the course of justice.\n- Abuse of the liberty granted to him.\n- Winning over of hostile witnesses by the accused on bail.\n- Cancellation under Section 437(5) or S. 439(2) of the Code.\n\n[Source 1: M.P. Ramesh And Others vs State Of Karnataka on 16 July, 199 (High_Court, 1990)]\n[Source 4: M.P. Ramesh And Others vs State Of Karnataka on 16 July, 199 (High_Court, 1990)]",
+      "expected_case_type": "Criminal",
+      "detected_intent": "Criminal",
+      "scores": {
+        "relevance": 0.701,
+        "faithfulness": 1.0,
+        "answer_overlap": 0.09
+      },
+      "self_healed": false,
+      "latency_ms": 15523.45,
+      "sources_count": 3,
+      "warning": null
+    },
+    {
+      "question": "What is the limitation period for filing a suit for wrongful dismissal?",
+      "ground_truth": "When the order of dismissal is void and inoperative there is no limitation for instituting a suit for declaration by the dismissed employee.",
+      "answer": "Based on the provided sources, the limitation period for filing a suit for wrongful dismissal is not clearly specified. However, we can infer the following:\n\n- In Valjibhai Jagjivanbhai vs State Of Gujarat (Source 1), the High Court held that when the order of dismissal or discharge is void and inoperative, there is no limitation for instituting a suit for declaration by the dismissed employee.\n\n- In Ramanbhai Trikamlal vs Vaghri Vaghabhai Oghabhai And ... (Source 2), the High Court observed that the law of limitation which governs an action is the law which prevails on the date when the suit is instituted or when the appeal or application is filed. However, it does not specify the limitation period for wrongful dismissal.\n\n- In Shri Sanyojan Co-Operative ... vs Surajben And Ors. (Source 3), the High Court mentions Article 58 of the Limitation Act, which prescribes a period of three years from the date when the right to sue first accrues for obtaining a declaration. However, this article is a residuary article and does not specifically cover cases of wrongful dismissal.\n\n- In Ratnagiri District Central Co. ... vs Dinkar K. Watve And Or (Source 4), the High Court observed that the limitation of three months prescribed under Section 79(3) can be extended by the employee himself to three or thirty years, making mockery of such limitation itself. However, this observation is made in the context of a different provision and does not specify the limitation period for wrongful dismissal.\n\n- In Ramanbhai Trikamlal vs Vaghri Vaghabhai Oghabhai And ... (Source 5), the High Court mentions that the period of limitation prescribed under the 1963 Act expires in the case of suits before the expiry of seven years and, in the case of appeal or application, within ninety days of Jan. 1, 1964. However, this provision does not specifically cover cases of wrongful dismissal.\n\nIn conclusion, the limitation period for filing a suit for wrongful dismissal is not clearly specified in the provided sources.",
+      "expected_case_type": "Industrial&Labour",
+      "detected_intent": "General",
+      "scores": {
+        "relevance": 0.624,
+        "faithfulness": 1.0,
+        "answer_overlap": 0.171
+      },
+      "self_healed": false,
+      "latency_ms": 16337.38,
+      "sources_count": 4,
+      "warning": null
+    },
+    {
+      "question": "What factors does the court consider in determining compensation for acquired land?",
+      "ground_truth": "The court considers the market value on the date of notification, the nature and location of the land, comparable sale instances, and adds solatium and interest on the compensation amount.",
+      "answer": "The court considers the following factors in determining compensation for acquired land:\n\n1. Market value of the land at the date of publication of the notification under Section 4, sub-section (1) of the Land Acquisition Act [Source 1: Patel Maganbhi Chaturbhai And ... vs The Collector, Mehsana (High_Court, 1966)].\n2. Fifteen per centum on the market value in consideration of the compulsory nature of the acquisition [Source 1: Patel Maganbhi Chaturbhai And ... vs The Collector, Mehsana (High_Court, 1966)].\n3. Evaluation of the immovable property sought to be acquired, considering the matter judiciously as far as possible [Source 2: Special Land Acquisition Officer ... vs Shantibhai Jivabhai (High_Court, 1992)].\n4. Best use to which a willing purchaser would like to put the land [Source 4: Special Land Acquisition Officer ... vs Shantibhai Jivabhai (High_Court, 1992)].\n5. Existing utility of the land [Source 4: Special Land Acquisition Officer ... vs Shantibhai Jivabhai (High_Court, 1992)].\n6. Solatium at the rate of 30% on the additional amount of compensation awarded by the Court [Source 5: Special Land Acquisition Officer ... vs Patel Bhagwandas K. (High_Court, 1995)].\n7. Additional amount at the rate of 12% per annum on the market value for a period from 15th November 1979 to 23rd September 1986 [Source 5: Special Land Acquisition Officer ... vs Patel Bhagwandas K. (High_Court, 1995)].\n8. Interest at the rate of 12% per annum for a period of one year from the date of taking over the possession of the land under acquisition [Source 5: Special Land Acquisition Officer ... vs Patel Bhagwandas K. (High_Court, 1995)].\n9. Interest at the rate of 15% per annum from the date of expiry of the period of one year till the amount is deposited with the trial Court [Source 5: Special Land Acquisition Officer ... vs Patel Bhagwandas K. (High_Court, 1995)].\n\nNote: The sources do not provide a comprehensive list of factors, and some factors may be mentioned in passing. However, the above list includes the factors explicitly mentioned in the sources.",
+      "expected_case_type": "Land&Property",
+      "detected_intent": "Land&Property",
+      "scores": {
+        "relevance": 0.708,
+        "faithfulness": 0.75,
+        "answer_overlap": 0.133
+      },
+      "self_healed": false,
+      "latency_ms": 13464.7,
+      "sources_count": 4,
+      "warning": null
+    },
+    {
+      "question": "Can anticipatory bail be granted after FIR is filed?",
+      "ground_truth": "Yes. Filing of First Information Report is not a condition precedent to the exercise of power under Section 438 CrPC. Anticipatory bail can be granted even after an FIR is registered.",
+      "answer": "Based on the provided legal sources, the answer to the question is:\n\nYes, anticipatory bail can be granted after an FIR is filed.\n\n[Source 1: R.L. Jalappa vs Delhi Police Establishment on 12 May, 1988 (High_Court, 1988)] states that \"the filing of First Information Report is not a condition precedent to the exercise of the power under Section 438.\" [Source 1]\n\n[Source 2: Sri H D Kumaraswamy vs State Of Karnataka on 8 June, 2012 (High_Court, 2012)] also supports this view, stating that \"merely because subsequent to filing of the petition under Section 438 of Cr.P.C., the Investigating Officer has filed charge sheet and the jurisdictional Court has taken cognizance of the offences alleged therein, the petition filed for the relief of anticipatory bail does not become infructuous.\" [Source 2]\n\nFurthermore, [Source 3: Sri H D Kumaraswamy vs State Of Karnataka on 8 June, 2012 (High_Court, 2012)] states that \"the fact of taking cognizance or filing of a charge-sheet cannot by itself be construed as a prohibition against the grant of anticipatory bail.\" [Source 3]\n\nTherefore, based on the above sources, it is clear that anticipatory bail can be granted even after an FIR is filed, as long as the applicant has not been arrested.",
+      "expected_case_type": "Criminal",
+      "detected_intent": "Criminal",
+      "scores": {
+        "relevance": 0.738,
+        "faithfulness": 0.684,
+        "answer_overlap": 0.283
+      },
+      "self_healed": false,
+      "latency_ms": 15127.1,
+      "sources_count": 2,
+      "warning": null
+    },
+    {
+      "question": "What is the court's power under Section 11A of Industrial Disputes Act?",
+      "ground_truth": "Under Section 11A the Labour Court has power to examine whether the punishment imposed by management is proportionate to the misconduct and can substitute its own decision including reducing dismissal to a lesser punishment.",
+      "answer": "Unfortunately, the provided sources do not explicitly mention the court's power under Section 11A of the Industrial Disputes Act. However, based on the information provided in [Source 4: Kishorbhai Dahyabhai Solanki vs Nagjibhai Muljibhai Patel on (High_Court, 2002)], we can infer that Section 11A of the Act provides for powers of Labour Courts, Tribunals etc. to give appropriate relief in case of discharge or dismissal of workmen.\n\n[Source 4: Kishorbhai Dahyabhai Solanki vs Nagjibhai Muljibhai Patel on (High_Court, 2002)] states: \"Section 11A of the Act provides for powers of Labour Courts, Tribunals etc. to give appropriate relief in case of discharge or dismissal of workmen.\"\n\nHowever, to determine the specific power of the court under Section 11A, we would need more information from the provided sources or additional sources that explicitly mention the court's power under this section.\n\nTherefore, I must say that the sources do not contain enough information to provide a precise answer to the question.",
+      "expected_case_type": "Industrial&Labour",
+      "detected_intent": "Industrial&Labour",
+      "scores": {
+        "relevance": 0.687,
+        "faithfulness": 0.75,
+        "answer_overlap": 0.163
+      },
+      "self_healed": false,
+      "latency_ms": 14735.88,
+      "sources_count": 4,
+      "warning": null
+    },
+    {
+      "question": "What does the Land Acquisition Act say about urgency clause?",
+      "ground_truth": "Under Section 17 the government can invoke urgency clause to take immediate possession of land without following the normal inquiry procedure when the acquisition is urgently necessary for public purpose.",
+      "answer": "The Land Acquisition Act does not explicitly define the urgency clause. However, it can be inferred from the provided sources that the urgency clause is subjective and can be determined by the Government.\n\nAccording to [Source 1], the opinion as to the urgency under Section 17(4) of the Land Acquisition Act may be subjectively arrived at by the Government, and the correctness of the opinion so formed cannot raise a justiciable issue, unless it can be shown that such an opinion was only a pretended opinion or an opinion formed in mala fide exercise of the discretion vested in the Government.\n\nSimilarly, [Source 2] states that the urgency for the land acquisition is to be determined on the subjective satisfaction of the Government, and in the absence of any proof that the opinion as to the urgency was only a pretended opinion or an opinion mala fide formed, the provisions of Section 17(4) of the Land Acquisition Act can be applied.\n\nHowever, [Source 4] suggests that the invocation of the urgency clause under Section 17(4) of the Act requires a valid ground and that the State Government must consider the need to dispense with the enquiry under section 5-A of the Act, despite the existence of an urgency or unforeseen emergency.\n\nTherefore, it can be concluded that the Land Acquisition Act does not provide a clear definition of the urgency clause, but it is subjective and can be determined by the Government, subject to certain conditions and requirements.\n\n[Source 1: Gadadhar Ghosh vs State Of West Bengal on 28 August, 1962 (High_Court, 1962)]\n[Source 2: Gadadhar Ghosh vs State Of West Bengal on 28 August, 1962 (High_Court, 1962)]\n[Source 4: Mt.Prabhawati & Ors vs The State Of Bihar & Ors on 24 November (High_Court, 2011)]",
+      "expected_case_type": "Land&Property",
+      "detected_intent": "Land&Property",
+      "scores": {
+        "relevance": 0.77,
+        "faithfulness": 0.76,
+        "answer_overlap": 0.113
+      },
+      "self_healed": false,
+      "latency_ms": 14956.44,
+      "sources_count": 3,
+      "warning": null
+    }
+  ]
+}

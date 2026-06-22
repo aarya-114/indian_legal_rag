@@ -1,0 +1,52 @@
+[
+  {
+    "question": "What are the conditions for granting anticipatory bail?",
+    "ground_truth": "The court must consider the nature and gravity of the accusation, the antecedents of the applicant, the possibility of the applicant fleeing justice, and whether the accusation is made with intent to humiliate the applicant.",
+    "expected_case_type": "Criminal"
+  },
+  {
+    "question": "How is market value determined in land acquisition cases?",
+    "ground_truth": "Market value is determined based on the price the land would fetch if sold in the open market on the date of publication of the notification under Section 4 of the Land Acquisition Act.",
+    "expected_case_type": "Land&Property"
+  },
+  {
+    "question": "Can an employee approach court if dismissed without following natural justice?",
+    "ground_truth": "Yes. If dismissal is in violation of principles of natural justice or mandatory statutory provisions, the employee can approach the court and the dismissal can be declared void and inoperative.",
+    "expected_case_type": "Industrial&Labour"
+  },
+  {
+    "question": "What is solatium in land acquisition compensation?",
+    "ground_truth": "Solatium is an additional amount of 30% on the market value awarded to the land owner as compensation for the compulsory nature of the acquisition.",
+    "expected_case_type": "Land&Property"
+  },
+  {
+    "question": "Under what circumstances can anticipatory bail be cancelled?",
+    "ground_truth": "Anticipatory bail can be cancelled if the accused misuses the liberty, tampers with evidence, threatens witnesses, or if new facts emerge that make custodial interrogation necessary.",
+    "expected_case_type": "Criminal"
+  },
+  {
+    "question": "What is the limitation period for filing a suit for wrongful dismissal?",
+    "ground_truth": "When the order of dismissal is void and inoperative there is no limitation for instituting a suit for declaration by the dismissed employee.",
+    "expected_case_type": "Industrial&Labour"
+  },
+  {
+    "question": "What factors does the court consider in determining compensation for acquired land?",
+    "ground_truth": "The court considers the market value on the date of notification, the nature and location of the land, comparable sale instances, and adds solatium and interest on the compensation amount.",
+    "expected_case_type": "Land&Property"
+  },
+  {
+    "question": "Can anticipatory bail be granted after FIR is filed?",
+    "ground_truth": "Yes. Filing of First Information Report is not a condition precedent to the exercise of power under Section 438 CrPC. Anticipatory bail can be granted even after an FIR is registered.",
+    "expected_case_type": "Criminal"
+  },
+  {
+    "question": "What is the court's power under Section 11A of Industrial Disputes Act?",
+    "ground_truth": "Under Section 11A the Labour Court has power to examine whether the punishment imposed by management is proportionate to the misconduct and can substitute its own decision including reducing dismissal to a lesser punishment.",
+    "expected_case_type": "Industrial&Labour"
+  },
+  {
+    "question": "What does the Land Acquisition Act say about urgency clause?",
+    "ground_truth": "Under Section 17 the government can invoke urgency clause to take immediate possession of land without following the normal inquiry procedure when the acquisition is urgently necessary for public purpose.",
+    "expected_case_type": "Land&Property"
+  }
+]
