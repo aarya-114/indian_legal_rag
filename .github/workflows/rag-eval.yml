@@ -55,7 +55,7 @@ jobs:
       - name: Build ChromaDB
         if: steps.chroma-cache.outputs.cache-hit != 'true'
         run: |
-          PYTHONPATH=. python src/ingestion/create_embeddings.py
+          PYTHONPATH=. python src/embeddings/embedder.py 
 
 
       - name: Run evaluation
