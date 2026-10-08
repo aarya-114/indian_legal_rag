@@ -2,7 +2,6 @@
 __pycache__
 *.pyc
 .git
-data/cache
-data/raw
+data/
 *.log
 .env

@@ -155,6 +155,8 @@ def log_to_postgres(
     if not db_url:
         return  # skip if postgres not configured
 
+    conn = None
+    cur = None
     try:
         conn = psycopg2.connect(db_url)
         cur = conn.cursor()
@@ -175,11 +177,20 @@ def log_to_postgres(
             detected_intent
         ))
         conn.commit()
-        cur.close()
-        conn.close()
     except Exception as e:
         logger.warning(f"Failed to log to postgres: {e}")
         # never crash the API because of logging failure
+    finally:
+        if cur is not None:
+            try:
+                cur.close()
+            except Exception as e:
+                logger.warning(f"Failed to close postgres cursor: {e}")
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception as e:
+                logger.warning(f"Failed to close postgres connection: {e}")
 
 
 # ── endpoints ──
@@ -213,7 +224,8 @@ async def query_endpoint(request: QueryRequest):
         result = rag_query(
             query=request.query,
             retriever=retriever,
-            top_k=request.top_k
+            top_k=request.top_k,
+            filter_case_type=request.filter_case_type
         )
     except Exception as e:
         logger.error(f"RAG query failed: {e}")
@@ -265,6 +277,8 @@ async def stats():
     if not db_url:
         return {"message": "PostgreSQL not configured"}
 
+    conn = None
+    cur = None
     try:
         conn = psycopg2.connect(db_url)
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -286,11 +300,19 @@ async def stats():
         """)
 
         rows = cur.fetchall()
-        cur.close()
-        conn.close()
-
         return {"stats": [dict(r) for r in rows]}
 
     except Exception as e:
-        logger.error(f"Stats query failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning(f"Stats unavailable because PostgreSQL failed: {e}")
+        return {"message": "PostgreSQL unavailable"}
+    finally:
+        if cur is not None:
+            try:
+                cur.close()
+            except Exception as e:
+                logger.warning(f"Failed to close postgres cursor: {e}")
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception as e:
+                logger.warning(f"Failed to close postgres connection: {e}")

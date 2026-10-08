@@ -208,7 +208,8 @@ Answer:"""
 def rag_query(
     query: str,
     retriever: HybridRetriever,
-    top_k: int = 5
+    top_k: int = 5,
+    filter_case_type: str = None
 ) -> dict:
     """
     Full RAG pipeline with self-healing.
@@ -235,7 +236,7 @@ def rag_query(
     chunks = retriever.retrieve(
         query=query,
         top_k=top_k,
-        filter_case_type=intent["case_type"],
+        filter_case_type=filter_case_type or intent["case_type"],
         filter_court_type=intent["court_type"]
     )
 
@@ -257,7 +258,7 @@ def rag_query(
         chunks = retriever.retrieve(
             query=rewritten_query,
             top_k=top_k,
-            filter_case_type=None,  # widen search
+            filter_case_type=filter_case_type,  # preserve caller filter
             filter_court_type=None
         )
 

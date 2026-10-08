@@ -243,7 +243,9 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
 
     load_dotenv()
-    login(token=os.getenv("HF_TOKEN"))
+    token = os.getenv("HF_TOKEN")
+    if token:
+        login(token=token)
 
     judgments = load_dataset(
         "opennyaiorg/InJudgements_dataset",
