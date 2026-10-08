@@ -7,3 +7,5 @@ data/raw/
 data/chroma_db/
 *.log
 .DS_Store
+data/processed/
+data/eval/eval_results.json

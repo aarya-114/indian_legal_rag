@@ -7,7 +7,9 @@ from huggingface_hub import login
 from dotenv import load_dotenv
 
 load_dotenv()
-login(token=os.getenv("HF_TOKEN"))
+token = os.getenv("HF_TOKEN")
+if token:
+    login(token=token)
 
 logging.basicConfig(
     level=logging.INFO,

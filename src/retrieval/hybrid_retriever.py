@@ -151,7 +151,10 @@ class HybridRetriever:
     def sparse_search(
         self,
         query: str,
-        n_results: int = 20
+        n_results: int = 20,
+        filter_case_type: str = None,
+        filter_court_type: str = None,
+        filter_year: str = None
     ) -> list[dict]:
         """
         BM25 sparse retrieval.
@@ -161,9 +164,15 @@ class HybridRetriever:
         query_tokens = preprocess_for_bm25(query)
         scores = self.bm25.get_scores(query_tokens)
 
-        # get top-n indices
+        # Apply metadata filters before ranking so unrelated documents cannot crowd out matches.
+        eligible_indices = [
+            i for i, chunk in enumerate(self.all_chunks)
+            if (not filter_case_type or chunk.get("case_type") == filter_case_type)
+            and (not filter_court_type or chunk.get("court_type") == filter_court_type)
+            and (not filter_year or str(chunk.get("year")) == str(filter_year))
+        ]
         top_indices = sorted(
-            range(len(scores)),
+            eligible_indices,
             key=lambda i: scores[i],
             reverse=True
         )[:n_results]
@@ -330,7 +339,10 @@ class HybridRetriever:
         )
 
         # step 2: sparse BM25 search — top 20
-        sparse = self.sparse_search(query, n_results=20)
+        sparse = self.sparse_search(
+            query, n_results=20, filter_case_type=filter_case_type,
+            filter_court_type=filter_court_type, filter_year=filter_year
+        )
 
         # step 3: fuse with RRF
         fused = self.reciprocal_rank_fusion(dense, sparse)

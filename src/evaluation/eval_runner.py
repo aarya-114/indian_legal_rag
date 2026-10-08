@@ -66,7 +66,9 @@ def compute_token_overlap(text1: str, text2: str) -> float:
 
 def run_evaluation(
     eval_dataset_path: str,
-    results_path: str
+    results_path: str,
+    retriever=None,
+    query_fn=None
 ) -> dict:
     """
     Run full evaluation pipeline.
@@ -76,13 +78,13 @@ def run_evaluation(
     3. Compare answer to ground truth
     4. Track latency and self-heal rate
     """
-    from src.retrieval.hybrid_retriever import HybridRetriever
-    from src.api.rag_pipeline import rag_query
-
-    logger.info("Loading retriever for evaluation...")
-    retriever = HybridRetriever(
-        chunks_path="data/processed/chunks.json"
-    )
+    if retriever is None:
+        from src.retrieval.hybrid_retriever import HybridRetriever
+        logger.info("Loading retriever for evaluation...")
+        retriever = HybridRetriever(chunks_path="data/processed/chunks.json")
+    if query_fn is None:
+        from src.api.rag_pipeline import rag_query
+        query_fn = rag_query
 
     dataset = load_eval_dataset(eval_dataset_path)
     logger.info(f"Evaluating {len(dataset)} questions...")
@@ -102,7 +104,7 @@ def run_evaluation(
 
         start = time.time()
         try:
-            result = rag_query(question, retriever, top_k=5)
+            result = query_fn(question, retriever, top_k=5)
             latency_ms = (time.time() - start) * 1000
 
             # score answer against ground truth

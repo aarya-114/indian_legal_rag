@@ -1,6 +1,7 @@
 import json
 import re
 import logging
+import argparse
 from pathlib import Path
 from dataclasses import dataclass, asdict
 
@@ -212,7 +213,7 @@ def chunk_all_judgments(
     with open(judgments_path) as f:
         judgments = json.load(f)
 
-    if max_judgments:
+    if max_judgments is not None:
         judgments = judgments[:max_judgments]
         logger.info(f"Using subset: {max_judgments} judgments")
 
@@ -282,12 +283,17 @@ def analyze_chunks(chunks: list[dict]):
     print("-" * 50)
 
 
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Chunk processed judgments")
+    parser.add_argument("--limit", type=int, default=None, help="Maximum judgments to process (default: all)")
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
-    # during development use max_judgments=500 to test fast
-    # remove limit for full dataset
+    args = parse_args()
     chunks = chunk_all_judgments(
         judgments_path="data/processed/judgments_clean.json",
         output_path="data/processed/chunks.json",
-        max_judgments=500
+        max_judgments=args.limit
     )
     analyze_chunks(chunks)

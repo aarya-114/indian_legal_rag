@@ -1,0 +1,7 @@
+[
+  {
+    "question": "What is the rule for market value?",
+    "ground_truth": "market value is determined on notification date",
+    "expected_case_type": "Land&Property"
+  }
+]

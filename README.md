@@ -1,78 +1,74 @@
 # Indian Legal RAG
 
-A self-healing RAG system over Indian court judgments, with hybrid retrieval, automated faithfulness checking, and LLM evaluation CI/CD.
+A research prototype that retrieves Indian court judgment passages and generates source grounded answers. Phase 1 covers reproducible ingestion, hybrid retrieval, API behavior, evaluation scripts, and optional PostgreSQL query statistics.
 
-## What this is
+## Implemented behavior
 
-Generic RAG fails on Indian legal text — dense citation networks, archaic statutory language, and exact section-number references that semantic search alone misses. This project builds a retrieval-augmented generation pipeline specifically for Indian court judgments that:
+- Ingestion downloads OpenNyAI judgment and rhetorical role datasets; preprocessing cleans judgments and chunking produces 1,000 character chunks with 200 character overlap.
+- Chunking processes every cleaned judgment by default. Use \`--limit N\` for a local debug run.
+- Embeddings use sentence-transformers and are stored in a local ChromaDB collection. Retrieval combines dense ChromaDB results and BM25 results with reciprocal rank fusion, followed by the existing cross encoder reranker.
+- \`POST /query\` accepts \`filter_case_type\`; it is applied to dense and BM25 retrieval.
+- The answer generator and query rewrite use Groq and require \`GROQ_API_KEY\`. Data downloads can use \`HF_TOKEN\` when required by Hugging Face.
+- PostgreSQL query logging is optional. Logging failures are warnings and do not fail a query. \`/stats\` requires a configured, reachable database with the documented \`query_logs\` table.
 
-- Combines dense vector search with BM25 keyword search, fused with Reciprocal Rank Fusion
-- Reranks candidates with a cross-encoder for accuracy
-- Automatically detects low-confidence retrieval and retries with a legally-rephrased query (self-healing)
-- Verifies every generated answer's numbers and citations against the retrieved source text (faithfulness check)
-- Runs an automated evaluation suite on every pull request, blocking merges if quality regresses
+The project does not currently implement rhetorical role retrieval/classification, citation graph retrieval, NLI faithfulness, agents, authentication, or rate limiting. Its faithfulness score is rule based (number and legal reference matching). Evaluation uses the existing token overlap, relevance, and faithfulness calculations; these scores are not legal quality guarantees.
 
-## Architecture
-HuggingFace (OpenNyAI: judgments + rhetorical role labels)
+## Requirements and setup
 
-↓
+Use Python 3.11. On Windows, install the same requirements; uvloop is installed only on non Windows platforms.
 
-Ingestion → Cleaning → Chunking (sentence-boundary, 1000 chars, 200 overlap)
+\`\`\`powershell
+py -3.11 -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+# Add GROQ_API_KEY; add HF_TOKEN if your Hugging Face access needs it
+\`\`\`
 
-↓
+## Build the local index
 
-Local embeddings (sentence-transformers) → ChromaDB
+The full dataset is the default. These commands download and process the complete datasets and can take substantial time and disk space. Generated files under \`data/\` are intentionally excluded from git and Docker build context.
 
-↓
+\`\`\`powershell
+python src/ingestion/data_loader.py
+python src/ingestion/text_cleaner.py
+python src/chunking/legal_chunker.py
+python src/embeddings/embedder.py
+\`\`\`
 
-FastAPI
+For a quick chunking debug run, after preprocessing has created \`data/processed/judgments_clean.json\`, use: \`python src/chunking/legal_chunker.py --limit 50\`. Embedding has its own optional \`max_chunks\` Python argument; the normal script indexes all generated chunks.
 
-↓
+## Run the API
 
-Query Intent Classifier
+\`\`\`powershell
+$env:PYTHONPATH = "."
+python -m uvicorn src.api.main:app --reload --port 8000
+\`\`\`
 
-↓              ↓
+The API loads the local ChromaDB collection and chunk JSON at startup, so build the index first. Open \`http://localhost:8000/docs\` to inspect the API.
 
-Dense (ChromaDB)   Sparse (BM25)
+## Evaluation and CI
 
-↓              ↓
+The full evaluation remains \`python src/evaluation/eval_runner.py\` followed by \`python src/evaluation/score_gate.py data/eval/eval_results.json\`. It uses the existing evaluation dataset, local index, Groq generation, and current score gate thresholds. It is not run automatically in CI.
 
-Reciprocal Rank Fusion
+Push and pull request CI installs \`requirements-ci.txt\` and runs lightweight unit tests with synthetic retrieval results and mocked model services. It does not download judgment data, models, or run the full benchmark.
 
-↓
+## Docker
 
-Cross-Encoder Reranker
+Build the application image without generated data: \`docker build -t indian-legal-rag .\`. To serve queries, first build the local index as above, then mount the generated data directory and provide required environment variables when running the image. For example, in PowerShell:
 
-↓
+\`\`\`powershell
+docker run --rm -p 8000:8000 -v "$(Resolve-Path data):/app/data" --env-file .env indian-legal-rag
+\`\`\`
 
-Relevance Check
+The image build uses tracked source and pinned direct dependencies. Index files remain local artifacts and must be generated separately.
 
-(low? → rewrite query → retry)
+## Optional PostgreSQL statistics
 
-↓
+Set \`DATABASE_URL\` to enable query logging. Create the table before using \`/stats\`:
 
-Groq Generation (grounded, cited)
-
-↓
-
-Faithfulness Check
-
-↓
-
-PostgreSQL logging 
-
-↓
-
-Response with sources + scores
-
-## Known limitations
-- Cost/quality logging to PostgreSQL is implemented but optional — the app runs fully without a database configured; query logging silently skips if `DATABASE_URL` isn't set
-
-## Why PostgreSQL
-PostgreSQL is not part of the RAG pipeline itself — retrieval, generation, and faithfulness checking all work independently of it. It exists solely as a query log: every call to `/query` writes a row recording the question, scores, latency, and estimated cost. This powers the `/stats` endpoint, which aggregates cost-per-query and quality trends over time. The system runs fully without it — logging is skipped silently if `DATABASE_URL` isn't set — but with it, the project demonstrates basic cost/ROI tracking and SQL-based analytics on top of the AI pipeline.
-# create database and table
-createdb legal_rag
-psql legal_rag -c "
+\`\`\`sql
 CREATE TABLE query_logs (
     id SERIAL PRIMARY KEY,
     query TEXT,
@@ -85,63 +81,15 @@ CREATE TABLE query_logs (
     detected_intent TEXT,
     created_at TIMESTAMP
 );
-"
+\`\`\`
 
+## Tests
 
+\`\`\`powershell
+python -m pip install -r requirements-ci.txt
+python -m unittest discover -s tests -v
+\`\`\`
 
-## Results
+## Limitations
 
-| Metric | Score |
-|---|---|
-| Avg relevance | 0.718 |
-| Avg faithfulness | 0.842 |
-| Self-heal rate (eval set) | 0% |
-| Chunks indexed | 34,709 |
-| Source judgments | 11,970 |
-| Embedding cost | $0.00 (local model) |
-
-## Tech stack
-
-Python · FastAPI · sentence-transformers · ChromaDB · rank-bm25 · cross-encoder reranking · Groq (llama-3.1-8b-instant) · PostgreSQL · GitHub Actions · Docker
-
-## CI/CD
-
-Every push and pull request triggers `.github/workflows/rag-eval.yml`, which runs 10 curated legal Q&A pairs through the full pipeline and checks scores against thresholds (relevance ≥ 0.55, faithfulness ≥ 0.60). If either drops below threshold, the pipeline fails and blocks the merge.
-
-## Data
-
-[OpenNyAI](https://huggingface.co/opennyaiorg) datasets via HuggingFace — `InJudgements_dataset` (11,970 Indian High Court / Supreme Court judgments) and `InRhetoricalRoles` (26,133 human-labeled rhetorical role spans). Predominantly High Court civil matters — Land & Property, Constitutional, Tax, and Financial cases are most represented; Criminal and Industrial & Labour cases are comparatively fewer.
-
-## Running locally
-
-```bash
-git clone https://github.com/<your-username>/indian-legal-rag.git
-cd indian-legal-rag
-pip install -r requirements.txt
-
-# set environment variables
-cp .env.example .env   # add your GROQ_API_KEY and HF_TOKEN
-
-# run data pipeline (downloads, cleans, chunks, embeds — takes a few minutes)
-python src/ingestion/data_loader.py
-python src/ingestion/text_cleaner.py
-python src/chunking/legal_chunker.py
-python src/embeddings/embedder.py
-
-# start the API
-PYTHONPATH=. uvicorn src.api.main:app --reload --port 8000
-```
-
-Visit `http://localhost:8000/docs` for the interactive API explorer.
-
-## Known limitations
-
-- No authentication or rate limiting on the API
-- BM25 index rebuilds from disk on every cold start rather than persisting
-- Faithfulness check is rule-based (number/citation matching), not a full NLI model
-- Self-healing is a deterministic retry, not an agentic decision loop
-- Not legal advice — research and engineering demonstration only
-
-## License
-
-MIT
+This project is for legal research demonstration, not legal advice. No authentication or rate limiting is implemented. The BM25 corpus is loaded from the local chunk file at startup, and the local vector index and model downloads are not included in the repository.
