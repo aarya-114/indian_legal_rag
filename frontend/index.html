@@ -59,34 +59,38 @@
       <div class="results-heading">
         <div>
           <p class="eyebrow">Research response</p>
-          <h2>Answer and sources</h2>
+          <h2>Legal research response</h2>
         </div>
         <span id="result-intent" class="intent-pill" hidden></span>
       </div>
 
-      <div id="warning" class="warning" role="status" hidden></div>
+      <div id="citation-warning" class="warning citation-warning" role="alert" hidden></div>
+      <div id="warning" class="warning research-warning" role="status" hidden></div>
 
       <article class="answer-card">
-        <div class="card-kicker"><span class="kicker-line"></span>Grounded answer</div>
-        <p id="answer-text" class="answer-text"></p>
+        <div class="card-kicker"><span class="kicker-line"></span>Generated answer</div>
+        <div id="answer-text" class="answer-text" aria-live="polite"></div>
       </article>
-
-      <section class="metrics-section" aria-labelledby="metrics-heading">
-        <div class="section-heading">
-          <h3 id="metrics-heading">Query details</h3>
-          <span class="section-rule"></span>
-        </div>
-        <dl id="metrics" class="metrics-grid"></dl>
-      </section>
 
       <section class="sources-section" aria-labelledby="sources-heading">
         <div class="section-heading">
-          <h3 id="sources-heading">Retrieved judgments</h3>
+          <div>
+            <p class="eyebrow">Evidence</p>
+            <h3 id="sources-heading">Citations &amp; Supporting Judgments</h3>
+          </div>
+          <span class="section-rule"></span>
           <span id="source-count" class="source-count"></span>
         </div>
         <div id="sources" class="source-list"></div>
         <p id="empty-sources" class="empty-sources" hidden>No source details were returned for this response.</p>
+        <p class="citation-caveat">A matching source ID links to a retrieved judgment. It does not confirm that the judgment supports a claim or establish legal correctness.</p>
       </section>
+
+      <details id="diagnostics" class="diagnostics" hidden>
+        <summary>Retrieval diagnostics &amp; technical details</summary>
+        <p class="diagnostics-note">Scores and recovery metadata describe system behavior; they are not measures of legal correctness.</p>
+        <dl id="metrics" class="metrics-grid"></dl>
+      </details>
 
       <aside id="disclaimer" class="disclaimer" aria-label="Legal disclaimer"></aside>
     </section>

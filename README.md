@@ -25,7 +25,8 @@ flowchart LR
     end
 
     subgraph Runtime["Runtime: FastAPI query service"]
-        Client["Client"] --> API["FastAPI<br/>/query · /health · /stats"]
+        Client["Browser"] --> Frontend["Static HTML/CSS/JS<br/>frontend/"]
+        Frontend -->|JSON POST; configured API URL| API["FastAPI<br/>/query · /health · /stats"]
         API --> Guards["Body limit · per-IP rate limit<br/>request validation · safe errors"]
         Guards --> RAG["rag_query orchestration"]
         RAG --> Intent["Query intent classification<br/>case/court metadata filters"]
@@ -100,7 +101,7 @@ flowchart TD
     Log -. logging failure is non-fatal .-> Response
 ```
 
-The live service uses the existing local hybrid retriever and Groq-compatible API client. Evaluation calls the RAG pipeline directly against the configured local index; CI runs mocked/lightweight tests and builds the image, but does not run the full benchmark or create the local index.
+The live service uses the existing local hybrid retriever and Groq-compatible API client. The browser frontend is a separate static process and sends no provider credentials. Evaluation calls the RAG pipeline directly against the configured local index; CI runs mocked/lightweight tests and builds the image, but does not run the full benchmark or create the local index.
 
 ## Implemented behavior
 
@@ -148,6 +149,16 @@ python -m uvicorn src.api.main:app --reload --port 8000
 \`\`\`
 
 The API loads the local ChromaDB collection and chunk JSON at startup, so build the index first. Open \`http://localhost:8000/docs\` to inspect the API.
+
+## Frontend demo
+
+The static frontend has no build step or framework. With the backend running and the local index available, start it in a second PowerShell terminal from the repository root:
+
+\`\`\`powershell
+python -m http.server 5173 --bind 127.0.0.1 --directory frontend
+\`\`\`
+
+Open \`http://127.0.0.1:5173\`. By default, the page sends requests to \`http://127.0.0.1:8000\`; change \`LEGAL_RAG_API_BASE_URL\` in \`frontend/config.js\` if the API uses another origin. The existing FastAPI CORS middleware allows this separate local origin, so no backend static-file or CORS changes are required. Keep provider keys in the backend environment; the browser config contains only the API URL.
 
 ## Evaluation and CI
 

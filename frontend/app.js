@@ -15,8 +15,10 @@
   const sourceCount = document.querySelector("#source-count");
   const emptySources = document.querySelector("#empty-sources");
   const warning = document.querySelector("#warning");
+  const citationWarning = document.querySelector("#citation-warning");
   const disclaimer = document.querySelector("#disclaimer");
   const resultIntent = document.querySelector("#result-intent");
+  const diagnostics = document.querySelector("#diagnostics");
 
   queryInput.addEventListener("input", () => {
     characterCount.textContent = `${queryInput.value.length.toLocaleString()} / 4,000`;
@@ -93,27 +95,52 @@
   }
 
   function clearResultContent() {
-    answerText.textContent = "";
+    answerText.replaceChildren();
     metrics.replaceChildren();
     sources.replaceChildren();
     sourceCount.textContent = "";
     emptySources.hidden = true;
     warning.hidden = true;
     warning.textContent = "";
+    citationWarning.hidden = true;
+    citationWarning.textContent = "";
     disclaimer.textContent = "";
     resultIntent.hidden = true;
     resultIntent.textContent = "";
+    diagnostics.hidden = true;
+    diagnostics.open = false;
   }
 
   function renderResponse(data) {
     const answer = typeof data.answer === "string" ? data.answer.trim() : "";
-    answerText.textContent = answer || "No answer text was returned.";
-    renderMetrics(data.scores, data.metadata);
-    renderSources(Array.isArray(data.sources) ? data.sources : []);
+    const sourceItems = Array.isArray(data.sources) ? data.sources : [];
+    const sourceIds = new Set(sourceItems
+      .map((item) => item && item.source_id)
+      .filter((id) => typeof id === "string" && /^\d+$/.test(id)));
+    const citationValidation = data.citation_validation && typeof data.citation_validation === "object"
+      ? data.citation_validation
+      : {};
+    const unknownIds = Array.isArray(citationValidation.unknown_source_ids)
+      ? citationValidation.unknown_source_ids.filter((id) => /^\d+$/.test(String(id)))
+      : [];
+
+    renderAnswer(answer, sourceIds, new Set(unknownIds.map(String)));
+    renderSources(sourceItems);
+    renderDiagnostics(data.scores, data.metadata, sourceItems);
+
+    if (unknownIds.length) {
+      citationWarning.textContent = `The answer refers to source ID${unknownIds.length === 1 ? "" : "s"} that could not be matched to a retrieved judgment: ${unknownIds.map((id) => `[Source ${id}]`).join(", ")}. These references are not linked.`;
+      citationWarning.hidden = false;
+    }
 
     if (typeof data.warning === "string" && data.warning.trim()) {
-      warning.textContent = data.warning;
-      warning.hidden = false;
+      const otherWarnings = data.warning.split(";")
+        .filter((part) => !part.includes("unknown source ID(s)"))
+        .join(";").trim();
+      if (otherWarnings) {
+        warning.textContent = otherWarnings;
+        warning.hidden = false;
+      }
     }
     if (typeof data.disclaimer === "string" && data.disclaimer.trim()) {
       disclaimer.textContent = data.disclaimer;
@@ -125,13 +152,88 @@
     }
   }
 
-  function renderMetrics(scores, metadata) {
+  function renderAnswer(answer, sourceIds, unknownIds) {
+    answerText.replaceChildren();
+    if (!answer) {
+      const empty = document.createElement("p");
+      empty.className = "answer-empty";
+      empty.textContent = "No answer text was returned.";
+      answerText.append(empty);
+      return;
+    }
+
+    let paragraph = [];
+    let list = null;
+    const flushParagraph = () => {
+      if (!paragraph.length) return;
+      const block = document.createElement("p");
+      appendInline(block, paragraph.join(" "), sourceIds, unknownIds);
+      answerText.append(block);
+      paragraph = [];
+    };
+    const flushList = () => { list = null; };
+
+    for (const line of answer.split(/\r?\n/)) {
+      const itemMatch = line.match(/^\s*(?:[-*]\s+|\d+[.)]\s+)(.*)$/);
+      if (itemMatch) {
+        flushParagraph();
+        const ordered = /^\s*\d+[.)]\s+/.test(line);
+        const tagName = ordered ? "OL" : "UL";
+        if (!list || list.tagName !== tagName) {
+          list = document.createElement(ordered ? "ol" : "ul");
+          answerText.append(list);
+        }
+        const item = document.createElement("li");
+        appendInline(item, itemMatch[1], sourceIds, unknownIds);
+        list.append(item);
+      } else if (!line.trim()) {
+        flushParagraph();
+        flushList();
+      } else {
+        flushList();
+        paragraph.push(line.trim());
+      }
+    }
+    flushParagraph();
+  }
+
+  function appendInline(parent, text, sourceIds, unknownIds) {
+    const tokens = /\[\s*Source\s+(\d+)(?:\s*:[^\]]*)?\s*\]|\*\*([^*]+)\*\*/gi;
+    let previous = 0;
+    for (const match of text.matchAll(tokens)) {
+      parent.append(document.createTextNode(text.slice(previous, match.index)));
+      if (match[1]) {
+        const sourceId = match[1];
+        if (sourceIds.has(sourceId) && !unknownIds.has(sourceId)) {
+          const link = document.createElement("a");
+          link.className = "inline-citation";
+          link.href = `#source-${sourceId}`;
+          link.textContent = match[0];
+          link.setAttribute("aria-label", `Jump to supporting judgment ${sourceId}`);
+          parent.append(link);
+        } else {
+          const unresolved = document.createElement("span");
+          unresolved.className = "unresolved-citation";
+          unresolved.textContent = match[0];
+          parent.append(unresolved);
+        }
+      } else {
+        const strong = document.createElement("strong");
+        strong.textContent = match[2];
+        parent.append(strong);
+      }
+      previous = match.index + match[0].length;
+    }
+    parent.append(document.createTextNode(text.slice(previous)));
+  }
+
+  function renderDiagnostics(scores, metadata, sourceItems) {
     const items = [];
     if (scores && hasValue(scores.relevance)) {
-      items.push(["Retrieval reranker score", formatScore(scores.relevance)]);
+      items.push(["Retrieval reranker score (not a probability)", formatScore(scores.relevance)]);
     }
     if (scores && hasValue(scores.faithfulness)) {
-      items.push(["Rule-based faithfulness", formatScore(scores.faithfulness)]);
+      items.push(["Rule-based faithfulness (not legal verification)", formatScore(scores.faithfulness)]);
     }
     if (metadata && hasValue(metadata.latency_ms)) {
       const latency = Number(metadata.latency_ms);
@@ -144,6 +246,19 @@
       items.push(["Retrieval recovery", metadata.self_healed ? "Recovered" : "Not triggered"]);
     }
     if (metadata && hasValue(metadata.model)) items.push(["Model", String(metadata.model)]);
+    if (metadata && typeof metadata.rewrite_attempted === "boolean") {
+      items.push(["Query rewrite attempted", metadata.rewrite_attempted ? "Yes" : "No"]);
+    }
+    if (metadata && typeof metadata.retry_attempted === "boolean") {
+      items.push(["Retrieval retry attempted", metadata.retry_attempted ? "Yes" : "No"]);
+    }
+    if (metadata && typeof metadata.reference_recovered === "boolean") {
+      items.push(["Statutory reference recovered", metadata.reference_recovered ? "Yes" : "No"]);
+    }
+    for (const source of sourceItems) {
+      if (!source || !hasValue(source.relevance_score) || !/^\d+$/.test(String(source.source_id || ""))) continue;
+      items.push([`Source ${source.source_id} reranker score`, formatScore(source.relevance_score)]);
+    }
 
     for (const [label, value] of items) {
       const wrapper = document.createElement("div");
@@ -155,63 +270,79 @@
       wrapper.append(term, description);
       metrics.append(wrapper);
     }
-    metrics.parentElement.hidden = items.length === 0;
+    diagnostics.hidden = items.length === 0;
   }
 
   function renderSources(items) {
-    sourceCount.textContent = `${items.length} ${items.length === 1 ? "source" : "sources"}`;
-    emptySources.hidden = items.length > 0;
-
+    const unique = [];
+    const seen = new Set();
     for (const item of items) {
       if (!item || typeof item !== "object") continue;
+      const id = typeof item.source_id === "string" && /^\d+$/.test(item.source_id)
+        ? `source:${item.source_id}`
+        : validatedHttpUrl(item.url) || `record:${unique.length}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      unique.push(item);
+    }
+    sourceCount.textContent = `${unique.length} ${unique.length === 1 ? "judgment" : "judgments"}`;
+    emptySources.hidden = unique.length > 0;
+
+    for (const item of unique) {
       const card = document.createElement("article");
       card.className = "source-card";
-      if (typeof item.source_id === "string" && item.source_id.trim()) {
-        const sourceId = document.createElement("p");
-        sourceId.className = "source-id";
-        sourceId.textContent = `[Source ${item.source_id}]`;
-        card.append(sourceId);
+      const sourceId = typeof item.source_id === "string" && /^\d+$/.test(item.source_id)
+        ? item.source_id
+        : "";
+      if (sourceId) {
+        card.id = `source-${sourceId}`;
+        card.tabIndex = -1;
+        const sourceLabel = document.createElement("p");
+        sourceLabel.className = "source-label";
+        sourceLabel.textContent = `[Source ${item.source_id}]`;
+        card.append(sourceLabel);
       }
-      const title = document.createElement("h4");
-      title.className = "source-title";
-      const titleText = typeof item.title === "string" && item.title.trim()
-        ? item.title
-        : "Untitled judgment";
+      const titleText = typeof item.title === "string" ? item.title.trim() : "";
+      if (titleText) {
+        const title = document.createElement("h4");
+        title.className = "source-title";
+        title.textContent = titleText;
+        card.append(title);
+      }
+
+      const detailValues = [
+        ["Court", item.court],
+        ["Date", item.date || item.judgment_date],
+        ["Year", item.year],
+        ["Case type", item.case_type],
+      ];
+      const excerpt = typeof item.excerpt === "string" ? item.excerpt.trim() : "";
+      if (excerpt) {
+        const quote = document.createElement("blockquote");
+        quote.className = "source-excerpt";
+        quote.textContent = excerpt;
+        card.append(quote);
+      }
       const safeUrl = validatedHttpUrl(item.url);
       if (safeUrl) {
-        const link = document.createElement("a");
-        link.href = safeUrl;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.textContent = titleText;
-        title.append(link);
-      } else {
-        title.textContent = titleText;
+        const originalLink = document.createElement("a");
+        originalLink.className = "original-link";
+        originalLink.href = safeUrl;
+        originalLink.target = "_blank";
+        originalLink.rel = "noopener noreferrer";
+        originalLink.textContent = "Open original judgment";
+        card.append(originalLink);
       }
-      card.append(title);
 
       const details = document.createElement("div");
       details.className = "source-details";
-      for (const [key, value] of [
-        ["Court", item.court],
-        ["Year", item.year],
-        ["Case type", item.case_type],
-        ["Reranker score", item.relevance_score],
-      ]) {
-        if (!hasValue(value)) continue;
+      for (const [key, value] of detailValues) {
+        if (!hasValue(value) || typeof value !== "string" || !value.trim()) continue;
         const detail = document.createElement("span");
-        detail.textContent = key === "Reranker score"
-          ? `${key}: ${formatScore(value)}`
-          : `${key}: ${String(value)}`;
+        detail.textContent = `${key}: ${value.trim()}`;
         details.append(detail);
       }
-      card.append(details);
-      if (!safeUrl) {
-        const note = document.createElement("p");
-        note.className = "source-link-note";
-        note.textContent = "Source link unavailable";
-        card.append(note);
-      }
+      if (details.childElementCount) card.append(details);
       sources.append(card);
     }
     if (sources.childElementCount === 0) emptySources.hidden = false;
