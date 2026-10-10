@@ -66,6 +66,7 @@ class SelfHealingTelemetryTests(unittest.TestCase):
             timeout=37.0,
         )
 
+
     def run_query(self, retriever, rewrite):
         with (
             patch.object(rag_pipeline, "rewrite_query", side_effect=rewrite),
@@ -469,3 +470,137 @@ class SelfHealingTelemetryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CitationIntegrityTests(unittest.TestCase):
+    @staticmethod
+    def chunk(chunk_id, text, url, title="Same title"):
+        return {
+            "text": text,
+            "metadata": {
+                "chunk_id": chunk_id,
+                "doc_url": url,
+                "judgment_title": title,
+                "court_type": "HC",
+                "year": "2024",
+                "case_type": "General",
+            },
+            "rerank_score": 0.75,
+        }
+
+    def test_valid_source_reference_maps_to_returned_judgment(self):
+        chunks = [self.chunk("judgment_1_chunk_0001", "Evidence A", "https://court/a")]
+        sources = rag_pipeline.build_judgment_sources(chunks)
+        response_sources = [{key: value for key, value in sources[0].items()
+                             if key not in {"passages", "chunk_ids"}}]
+
+        self.assertEqual(sources[0]["source_id"], "1")
+        self.assertEqual(
+            rag_pipeline.validate_source_references("Supported [Source 1]", response_sources),
+            {"referenced_source_ids": ["1"], "unknown_source_ids": []},
+        )
+
+    def test_rag_result_uses_same_ids_in_answer_validation_and_sources(self):
+        retrieved = self.chunk(
+            "judgment_1_chunk_0001", "Evidence A", "https://court/a",
+        )
+        with (
+            patch.object(rag_pipeline, "score_relevance", return_value=0.8),
+            patch.object(rag_pipeline, "generate_answer", return_value="Answer [Source 1]"),
+            patch.object(rag_pipeline, "score_faithfulness", return_value=0.5),
+        ):
+            result = rag_pipeline.rag_query("Question", SequenceRetriever([retrieved]))
+
+        self.assertEqual(result["sources"][0]["source_id"], "1")
+        self.assertEqual(
+            result["citation_validation"],
+            {"referenced_source_ids": ["1"], "unknown_source_ids": []},
+        )
+        self.assertIn("Answer [Source 1]", result["answer"])
+
+    def test_rag_result_warns_for_generated_unknown_source_id(self):
+        retrieved = self.chunk(
+            "judgment_1_chunk_0001", "Evidence A", "https://court/a",
+        )
+        with (
+            patch.object(rag_pipeline, "score_relevance", return_value=0.8),
+            patch.object(rag_pipeline, "generate_answer", return_value="Answer [Source 5]"),
+            patch.object(rag_pipeline, "score_faithfulness", return_value=0.8),
+        ):
+            result = rag_pipeline.rag_query("Question", SequenceRetriever([retrieved]))
+
+        self.assertEqual(result["citation_validation"]["unknown_source_ids"], ["5"])
+        self.assertIn("unknown source ID(s): 5", result["warning"])
+
+    def test_unknown_source_reference_is_reported_not_remapped(self):
+        sources = [{"source_id": "1"}]
+        self.assertEqual(
+            rag_pipeline.validate_source_references("Claim [Source 2]", sources),
+            {"referenced_source_ids": ["2"], "unknown_source_ids": ["2"]},
+        )
+
+    def test_multiple_chunks_for_judgment_share_prompt_and_response_id(self):
+        chunks = [
+            self.chunk("judgment_1_chunk_0001", "First passage", "https://court/a"),
+            self.chunk("judgment_1_chunk_0002", "Second passage", "https://court/a"),
+            self.chunk("judgment_2_chunk_0001", "Other judgment", "https://court/b"),
+        ]
+        groups = rag_pipeline.build_judgment_sources(chunks)
+        self.assertEqual([group["source_id"] for group in groups], ["1", "2"])
+        self.assertEqual(groups[0]["passages"], ["First passage", "Second passage"])
+        self.assertEqual(groups[0]["chunk_ids"], [
+            "judgment_1_chunk_0001", "judgment_1_chunk_0002",
+        ])
+
+        response = types.SimpleNamespace(choices=[types.SimpleNamespace(
+            message=types.SimpleNamespace(content="Answer [Source 1]", refusal=None),
+            finish_reason="stop",
+        )])
+        client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(
+            create=Mock(return_value=response),
+        )))
+        with patch.object(rag_pipeline, "groq_client", client):
+            rag_pipeline.generate_answer("Question", chunks, {})
+        prompt = client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+        self.assertEqual(prompt.count("[Source 1:"), 1)
+        self.assertIn("First passage", prompt)
+        self.assertIn("Second passage", prompt)
+        self.assertIn("[Source 2:", prompt)
+
+    def test_missing_or_empty_metadata_does_not_merge_by_title_or_invent_link(self):
+        chunks = [
+            {"text": "Passage one", "metadata": {
+                "chunk_id": "judgment_1_chunk_0001", "judgment_title": "",
+            }},
+            {"text": "Passage two", "metadata": {
+                "chunk_id": "judgment_2_chunk_0001",
+            }},
+        ]
+        groups = rag_pipeline.build_judgment_sources(chunks)
+        self.assertEqual(len(groups), 2)
+        self.assertEqual([group["source_id"] for group in groups], ["1", "2"])
+        self.assertEqual([group["url"] for group in groups], ["", ""])
+        self.assertEqual([group["title"] for group in groups], ["", ""])
+        self.assertEqual(
+            rag_pipeline.build_judgment_sources([{"text": "   ", "metadata": {}}]),
+            [],
+        )
+        self.assertEqual(
+            rag_pipeline.build_judgment_sources([{"text": "No identity", "metadata": {}}]),
+            [],
+        )
+        self.assertEqual(
+            rag_pipeline.validate_source_references("Claim [Source 1]", []),
+            {"referenced_source_ids": ["1"], "unknown_source_ids": ["1"]},
+        )
+
+    def test_valid_citation_id_does_not_mark_unsupported_claim_verified(self):
+        answer = "Section 99 of Act 2099 permits dismissal [Source 1]."
+        sources = [{"source_id": "1"}]
+        validation = rag_pipeline.validate_source_references(answer, sources)
+        faithfulness = rag_pipeline.score_faithfulness(
+            answer, [{"text": "A passage with no such provision."}],
+        )
+        self.assertEqual(validation["unknown_source_ids"], [])
+        self.assertEqual(faithfulness, 0.0)
+        self.assertNotIn("legally_verified", validation)

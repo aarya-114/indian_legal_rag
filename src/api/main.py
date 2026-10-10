@@ -254,6 +254,7 @@ class QueryRequest(BaseModel):
 
 
 class SourceDocument(BaseModel):
+    source_id: str
     title: str
     court: str
     year: str
@@ -265,6 +266,11 @@ class SourceDocument(BaseModel):
 class QueryScores(BaseModel):
     relevance: float
     faithfulness: float
+
+
+class CitationValidation(BaseModel):
+    referenced_source_ids: list[str] = Field(default_factory=list)
+    unknown_source_ids: list[str] = Field(default_factory=list)
 
 
 class QueryMetadata(BaseModel):
@@ -280,6 +286,7 @@ class QueryResponse(BaseModel):
     query: str
     answer: str
     sources: list[SourceDocument]
+    citation_validation: CitationValidation = Field(default_factory=CitationValidation)
     scores: QueryScores
     metadata: QueryMetadata
     warning: Optional[str]
@@ -428,6 +435,9 @@ async def query_endpoint(request: QueryRequest):
             query=result["query"],
             answer=result["answer"],
             sources=[SourceDocument(**s) for s in result["sources"]],
+            citation_validation=CitationValidation(
+                **result.get("citation_validation", {})
+            ),
             scores=QueryScores(**result["scores"]),
             metadata=QueryMetadata(
                 **result["metadata"],

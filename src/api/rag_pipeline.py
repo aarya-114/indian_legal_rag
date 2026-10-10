@@ -330,14 +330,18 @@ def generate_answer(
     Generate a bounded, grounded answer using the configured Groq model.
     Context is assembled from retrieved chunks with source citations.
     """
-    # assemble context with source information
+    # Number sources at judgment level, matching the API source records.
+    sources = build_judgment_sources(chunks)
     context_parts = []
-    for i, chunk in enumerate(chunks):
-        meta = chunk.get("metadata", {})
-        source = (f"{meta.get('judgment_title', 'Unknown')[:60]} "
-                  f"({meta.get('court_type', '')}, "
-                  f"{meta.get('year', '')})")
-        context_parts.append(f"[Source {i+1}: {source}]\n{chunk['text']}")
+    for source in sources:
+        label_title = source["title"][:60] or "Judgment metadata unavailable"
+        court_year = ", ".join(value for value in (
+            source["court"], source["year"],
+        ) if value)
+        suffix = f" ({court_year})" if court_year else ""
+        label = f"[Source {source['source_id']}: {label_title}{suffix}]"
+        passages = "\n\n".join(source["passages"])
+        context_parts.append(f"{label}\n{passages}")
 
     context = "\n\n---\n\n".join(context_parts)
 
@@ -366,6 +370,65 @@ Answer:"""
     )
 
     return extract_response_text(response, "answer generation")
+
+
+def build_judgment_sources(chunks: list[dict]) -> list[dict]:
+    """Group retrieved passages by document identity and assign query-local IDs.
+
+    URLs are preferred. When unavailable, the judgment prefix in chunk_id is
+    used. Chunks lacking both document identities are omitted: title alone is
+    not enough to safely identify or cite a judgment.
+    """
+    grouped = {}
+    for chunk in chunks:
+        meta = chunk.get("metadata") or {}
+        url = meta.get("doc_url")
+        url_key = url.strip().rstrip("/") if isinstance(url, str) else ""
+        chunk_id = meta.get("chunk_id")
+        chunk_id = chunk_id if isinstance(chunk_id, str) else ""
+        match = re.match(r"^(.*)_chunk_\d+$", chunk_id)
+        if not url_key and not match:
+            continue
+        identity = ("url", url_key) if url_key else ("judgment", match.group(1))
+        if identity not in grouped:
+            grouped[identity] = {
+                "source_id": str(len(grouped) + 1),
+                "title": str(meta.get("judgment_title") or ""),
+                "court": str(meta.get("court_type") or ""),
+                "year": str(meta.get("year") or ""),
+                "case_type": str(meta.get("case_type") or ""),
+                "url": url.strip() if isinstance(url, str) else "",
+                "relevance_score": round(chunk.get("rerank_score", 0), 3),
+                "passages": [],
+                "chunk_ids": [],
+            }
+        text = chunk.get("text")
+        if isinstance(text, str) and text.strip():
+            grouped[identity]["passages"].append(text)
+        if chunk_id and chunk_id not in grouped[identity]["chunk_ids"]:
+            grouped[identity]["chunk_ids"].append(chunk_id)
+    sources = [source for source in grouped.values() if source["passages"]]
+    # IDs are assigned after removing empty passages so prompt and API numbers
+    # remain contiguous and only identify evidence actually supplied to the LLM.
+    for source_id, source in enumerate(sources, start=1):
+        source["source_id"] = str(source_id)
+    return sources
+
+
+def validate_source_references(answer: str, sources: list[dict]) -> dict:
+    """Check citation IDs exist; this does not assess evidentiary support."""
+    valid_ids = {str(source.get("source_id")) for source in sources}
+    referenced = list(dict.fromkeys(
+        re.findall(
+            r"\[\s*Source\s+(\d+)(?:\s*:[^\]]*)?\s*\]",
+            answer or "",
+            re.IGNORECASE,
+        )
+    ))
+    return {
+        "referenced_source_ids": referenced,
+        "unknown_source_ids": [source_id for source_id in referenced if source_id not in valid_ids],
+    }
 
 
 def rag_query(
@@ -533,28 +596,22 @@ def rag_query(
     faithfulness_score = score_faithfulness(answer, chunks)
     logger.info(f"Faithfulness score: {faithfulness_score:.3f}")
 
-    # step 7 — build sources list
-    sources = []
-    seen_titles = set()
-    for chunk in chunks:
-        meta = chunk.get("metadata", {})
-        title = meta.get("judgment_title", "")
-        if title not in seen_titles:
-            sources.append({
-                "title": title,
-                "court": meta.get("court_type", ""),
-                "year": meta.get("year", ""),
-                "case_type": meta.get("case_type", ""),
-                "url": meta.get("doc_url", ""),
-                "relevance_score": round(
-                    chunk.get("rerank_score", 0), 3)
-            })
-            seen_titles.add(title)
+    # Use the same judgment-level IDs and identity rules as the prompt.
+    grouped_sources = build_judgment_sources(chunks)
+    sources = [
+        {key: source[key] for key in (
+            "source_id", "title", "court", "year", "case_type", "url",
+            "relevance_score",
+        )}
+        for source in grouped_sources
+    ]
+    citation_validation = validate_source_references(answer, sources)
 
     return {
         "query": query,
         "answer": answer,
         "sources": sources,
+        "citation_validation": citation_validation,
         "scores": {
             "relevance": round(relevance_score, 3),
             "faithfulness": round(faithfulness_score, 3),
@@ -579,9 +636,13 @@ def rag_query(
             "model": LLM_MODEL
         },
         "warning": (
-            "Low faithfulness — verify answer against sources"
-            if faithfulness_score < FAITHFULNESS_THRESHOLD
-            else None
+            "; ".join(filter(None, [
+                "Low faithfulness — verify answer against sources"
+                if faithfulness_score < FAITHFULNESS_THRESHOLD else None,
+                "Answer cites unknown source ID(s): " + ", ".join(
+                    citation_validation["unknown_source_ids"]
+                ) if citation_validation["unknown_source_ids"] else None,
+            ])) or None
         )
     }
 

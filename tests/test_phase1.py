@@ -343,10 +343,25 @@ class PhaseOneTests(unittest.TestCase):
     def test_api_forwards_filter_case_type(self):
         request = main.QueryRequest(query="Explain anticipatory bail conditions", filter_case_type="Criminal")
         main.retriever = object()
-        result = {"query": request.query, "answer": "Answer", "sources": [], "scores": {"relevance": 0.8, "faithfulness": 0.8}, "metadata": {"detected_intent": "Criminal", "self_healed": False, "chunks_retrieved": 0, "model": "test"}}
+        result = {
+            "query": request.query,
+            "answer": "Answer [Source 1]",
+            "sources": [{
+                "source_id": "1", "title": "Example case", "court": "HC",
+                "year": "2024", "case_type": "Criminal", "url": "",
+                "relevance_score": 0.8,
+            }],
+            "citation_validation": {
+                "referenced_source_ids": ["1"], "unknown_source_ids": [],
+            },
+            "scores": {"relevance": 0.8, "faithfulness": 0.8},
+            "metadata": {"detected_intent": "Criminal", "self_healed": False, "chunks_retrieved": 1, "model": "test"},
+        }
         with patch("src.api.rag_pipeline.rag_query", return_value=result) as query:
-            asyncio.run(main.query_endpoint(request))
+            response = asyncio.run(main.query_endpoint(request))
         self.assertEqual(query.call_args.kwargs["filter_case_type"], "Criminal")
+        self.assertEqual(response.sources[0].source_id, "1")
+        self.assertEqual(response.citation_validation.unknown_source_ids, [])
         main.retriever = None
 
     def test_query_request_rejects_missing_empty_and_whitespace_queries(self):

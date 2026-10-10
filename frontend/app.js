@@ -166,6 +166,12 @@
       if (!item || typeof item !== "object") continue;
       const card = document.createElement("article");
       card.className = "source-card";
+      if (typeof item.source_id === "string" && item.source_id.trim()) {
+        const sourceId = document.createElement("p");
+        sourceId.className = "source-id";
+        sourceId.textContent = `[Source ${item.source_id}]`;
+        card.append(sourceId);
+      }
       const title = document.createElement("h4");
       title.className = "source-title";
       const titleText = typeof item.title === "string" && item.title.trim()

@@ -150,6 +150,7 @@ button:disabled { cursor: wait; opacity: .72; }
 .source-list { display: grid; gap: 10px; }
 .source-card { padding: 15px 16px; border: 1px solid #e1e7ea; border-radius: 8px; transition: border-color .18s, background .18s; }
 .source-card:hover { border-color: #a7c8c3; background: #fcfefd; }
+.source-id { margin: 0 0 4px; color: var(--muted); font-size: .72rem; font-weight: 700; }
 .source-title { margin: 0 0 8px; font-size: .9rem; font-weight: 700; line-height: 1.45; }
 .source-title a { color: #135f67; text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .source-title a:hover { color: #073e48; }
