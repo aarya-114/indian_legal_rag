@@ -210,7 +210,7 @@ def chunk_all_judgments(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(judgments_path) as f:
+    with open(judgments_path, encoding="utf-8") as f:
         judgments = json.load(f)
 
     if max_judgments is not None:
@@ -236,7 +236,7 @@ def chunk_all_judgments(
         all_chunks.extend([asdict(c) for c in chunks])
 
     # save to disk
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(all_chunks, f, indent=2, ensure_ascii=False)
 
     logger.info(f"Total chunks: {len(all_chunks)}")

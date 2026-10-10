@@ -140,7 +140,7 @@ def save_raw_data(judgments_dataset, rhetorical_dataset):
     for example in judgments_dataset['train']:
         metadata.append(extract_judgment_metadata(example))
 
-    with open(metadata_path, "w") as f:
+    with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
     logger.info(f"Saved {len(metadata)} judgment metadata records to {metadata_path}")
 
@@ -151,7 +151,7 @@ def save_raw_data(judgments_dataset, rhetorical_dataset):
         spans = extract_rhetorical_spans(example)
         all_spans.extend(spans)
 
-    with open(spans_path, "w") as f:
+    with open(spans_path, "w", encoding="utf-8") as f:
         json.dump(all_spans, f, indent=2)
     logger.info(f"Saved {len(all_spans)} rhetorical spans to {spans_path}")
 

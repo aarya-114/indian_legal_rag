@@ -1,14 +1,14 @@
 import json
 from collections import Counter
 
-with open("data/raw/rhetorical_spans.json") as f:
+with open("data/raw/rhetorical_spans.json", encoding="utf-8") as f:
     spans = json.load(f)
 
-with open("data/raw/judgment_metadata.json") as f:
+with open("data/raw/judgment_metadata.json", encoding="utf-8") as f:
     metadata = json.load(f)
 
 
-with open("data/raw/label_distribution.json","w")as f:
+with open("data/raw/label_distribution.json", "w", encoding="utf-8") as f:
 
     # label distribution
     f.write("=== LABEL DISTRIBUTION ===\n")

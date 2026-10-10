@@ -80,7 +80,7 @@ class HybridRetriever:
         # load all chunks for BM25 index
         # BM25 needs all documents in memory
         logger.info("Loading chunks for BM25 index...")
-        with open(chunks_path) as f:
+        with open(chunks_path, "r", encoding="utf-8") as f:
             self.all_chunks = json.load(f)
 
         # build BM25 index
@@ -329,32 +329,149 @@ class HybridRetriever:
 
         This is the function your RAG pipeline calls.
         """
-        # step 1: dense search — top 20
-        dense = self.dense_search(
-            query,
-            n_results=20,
-            filter_case_type=filter_case_type,
-            filter_court_type=filter_court_type,
-            filter_year=filter_year
+        dense, sparse = self._retrieve_candidates(
+            query, filter_case_type, filter_court_type, filter_year
         )
+        return self._fuse_and_rerank(query, dense, sparse, top_k, use_reranker)
 
-        # step 2: sparse BM25 search — top 20
+    def _retrieve_candidates(
+        self,
+        query: str,
+        filter_case_type: str = None,
+        filter_court_type: str = None,
+        filter_year: str = None,
+    ) -> tuple[list[dict], list[dict]]:
+        """Return the dense and BM25 top-20 lists before fusion/reranking."""
+        dense = self.dense_search(
+            query, n_results=20, filter_case_type=filter_case_type,
+            filter_court_type=filter_court_type, filter_year=filter_year,
+        )
         sparse = self.sparse_search(
             query, n_results=20, filter_case_type=filter_case_type,
-            filter_court_type=filter_court_type, filter_year=filter_year
+            filter_court_type=filter_court_type, filter_year=filter_year,
         )
+        return dense, sparse
 
-        # step 3: fuse with RRF
+    def _fuse_and_rerank(
+        self,
+        query: str,
+        dense: list[dict],
+        sparse: list[dict],
+        top_k: int,
+        use_reranker: bool,
+    ) -> list[dict]:
         fused = self.reciprocal_rank_fusion(dense, sparse)
-
-        # step 4: rerank top-20 fused results
         candidates = fused[:20]
         if use_reranker and candidates:
-            final = self.rerank(query, candidates, top_k=top_k)
-        else:
-            final = candidates[:top_k]
+            return self.rerank(query, candidates, top_k=top_k)
+        return candidates[:top_k]
 
-        return final
+    @staticmethod
+    def _merge_ranked_lists(
+        first: list[dict], second: list[dict]
+    ) -> list[dict]:
+        """Deduplicate same-query result lists, retaining each chunk's best rank."""
+        best = {}
+        for source_order, results in enumerate((first, second)):
+            for rank, result in enumerate(results):
+                chunk_id = result.get("metadata", {}).get("chunk_id")
+                if chunk_id is None:
+                    continue
+                candidate = (rank, source_order, result)
+                if chunk_id not in best or candidate[:2] < best[chunk_id][:2]:
+                    best[chunk_id] = candidate
+        return [entry[2] for entry in sorted(best.values(), key=lambda x: x[:2])]
+
+    @staticmethod
+    def _contains_reference(text: str, reference: str) -> bool:
+        """Match a canonical section reference against common spacing/dash forms."""
+        match = re.fullmatch(r"section\s+(\d+)([a-z]?)", reference.casefold())
+        if not match:
+            return False
+        number, suffix = match.groups()
+        suffix_pattern = re.escape(suffix) if suffix else r""
+        pattern = (
+            rf"\b(?:section|sec\.?)\s*{re.escape(number)}"
+            rf"[\s\u00a0\u202f\-\u2010-\u2015\u2212]*"
+            rf"{suffix_pattern}\b"
+        )
+        return re.search(pattern, text, flags=re.IGNORECASE) is not None
+
+    def retrieve_with_reference_fallback(
+        self,
+        query: str,
+        required_reference: str,
+        top_k: int = 5,
+        filter_case_type: str = None,
+        fallback_case_type: str = None,
+        filter_court_type: str = None,
+        filter_year: str = None,
+        use_reranker: bool = True,
+    ) -> tuple[list[dict], dict]:
+        """Try filtered retrieval, then one broader candidate search if the
+        requested statutory reference is absent from the initial top-k.
+
+        The broader dense and BM25 lists are merged with the filtered lists
+        before RRF and cross-encoder reranking. ``fallback_case_type`` should
+        contain only an explicitly supplied caller filter; inferred filters
+        are removed for the fallback.
+        """
+        dense_initial, sparse_initial = self._retrieve_candidates(
+            query, filter_case_type, filter_court_type, filter_year
+        )
+        initial = self._fuse_and_rerank(
+            query, dense_initial, sparse_initial, top_k, use_reranker
+        )
+        initial_ids = [c.get("metadata", {}).get("chunk_id") for c in initial]
+        initial_reference_found = any(
+            self._contains_reference(c.get("text", ""), required_reference)
+            for c in initial
+        )
+        diagnostics = {
+            "initial_chunk_ids": initial_ids,
+            "fallback_activated": False,
+            "fallback_candidate_ids": [],
+            "fallback_chunk_ids": [],
+            "final_chunk_ids": initial_ids,
+            "reference_recovered": initial_reference_found,
+            "fallback_error": None,
+        }
+        if initial_reference_found:
+            return initial, diagnostics
+
+        diagnostics["fallback_activated"] = True
+        try:
+            dense_fallback, sparse_fallback = self._retrieve_candidates(
+                query, fallback_case_type, filter_court_type, filter_year
+            )
+            diagnostics["fallback_candidate_ids"] = list(dict.fromkeys(
+                c.get("metadata", {}).get("chunk_id")
+                for c in dense_fallback + sparse_fallback
+                if c.get("metadata", {}).get("chunk_id") is not None
+            ))
+            dense_merged = self._merge_ranked_lists(
+                dense_initial, dense_fallback
+            )
+            sparse_merged = self._merge_ranked_lists(
+                sparse_initial, sparse_fallback
+            )
+            final = self._fuse_and_rerank(
+                query, dense_merged, sparse_merged, top_k, use_reranker
+            )
+            diagnostics["fallback_chunk_ids"] = [
+                c.get("metadata", {}).get("chunk_id") for c in final
+            ]
+            diagnostics["final_chunk_ids"] = diagnostics["fallback_chunk_ids"]
+            diagnostics["reference_recovered"] = any(
+                self._contains_reference(c.get("text", ""), required_reference)
+                for c in final
+            )
+            return final, diagnostics
+        except Exception as exc:
+            # Initial evidence remains available; callers can safely abstain
+            # using it while telemetry records that fallback failed.
+            diagnostics["fallback_error"] = str(exc)
+            return initial, diagnostics
 
 
 def print_results(query: str, results: list[dict]):

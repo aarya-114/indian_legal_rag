@@ -3,20 +3,117 @@ import logging
 import json
 import re
 from dotenv import load_dotenv
-from groq import Groq
-from src.retrieval.hybrid_retriever import HybridRetriever , print_results
+from openai import OpenAI
+
 
 load_dotenv()
+LLM_MODEL = os.getenv("LLM_MODEL", "").strip()
+if not LLM_MODEL:
+    raise RuntimeError(
+        "LLM_MODEL is required. Set LLM_MODEL=<model-name> in your .env file."
+    )
+
+try:
+    LLM_REQUEST_TIMEOUT_SECONDS = float(
+        os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "60")
+    )
+except ValueError as exc:
+    raise RuntimeError("LLM_REQUEST_TIMEOUT_SECONDS must be a positive number.") from exc
+if not LLM_REQUEST_TIMEOUT_SECONDS > 0 or LLM_REQUEST_TIMEOUT_SECONDS == float("inf"):
+    raise RuntimeError("LLM_REQUEST_TIMEOUT_SECONDS must be a positive number.")
+
+try:
+    LLM_MAX_OUTPUT_TOKENS = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "1536"))
+except ValueError as exc:
+    raise RuntimeError("LLM_MAX_OUTPUT_TOKENS must be a positive integer.") from exc
+if LLM_MAX_OUTPUT_TOKENS <= 0:
+    raise RuntimeError("LLM_MAX_OUTPUT_TOKENS must be a positive integer.")
+
+groq_client = OpenAI(
+    api_key=os.getenv("GROQ_API_KEY"),
+    base_url="https://api.groq.com/openai/v1",
+    timeout=LLM_REQUEST_TIMEOUT_SECONDS,
+)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s — %(levelname)s — %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+from src.retrieval.hybrid_retriever import HybridRetriever, print_results
 
-# Groq free tier — llama3 is fast and good for legal reasoning
-LLM_MODEL = "llama-3.1-8b-instant"
+
+class LLMResponseError(RuntimeError):
+    """Raised when the configured LLM returns no usable assistant text."""
+
+    def __init__(self, message: str, finish_reason: str | None = None):
+        self.finish_reason = finish_reason
+        super().__init__(message)
+
+
+# Retain the former exception name for callers that imported it directly.
+OpenRouterResponseError = LLMResponseError
+
+
+class RAGGenerationError(RuntimeError):
+    """Generation failure carrying the retrieval score already computed."""
+
+    def __init__(self, stage: str, relevance_score: float,
+                 self_healed: bool, cause: Exception,
+                 rewrite_attempted: bool = False,
+                 retry_attempted: bool = False,
+                 rewrite_succeeded: bool = False,
+                 rewrite_failed: bool = False,
+                 retry_succeeded: bool = False,
+                 retry_failed: bool = False,
+                 retrieval_diagnostics: dict | None = None):
+        self.stage = stage
+        self.relevance_score = relevance_score
+        self.self_healed = self_healed
+        self.rewrite_attempted = rewrite_attempted
+        self.retry_attempted = retry_attempted
+        self.rewrite_succeeded = rewrite_succeeded
+        self.rewrite_failed = rewrite_failed
+        self.retry_succeeded = retry_succeeded
+        self.retry_failed = retry_failed
+        self.retrieval_diagnostics = retrieval_diagnostics or {}
+        self.cause = cause
+        super().__init__(f"{stage} failed after retrieval: {cause}")
+
+
+def extract_response_text(response, stage: str) -> str:
+    choices = getattr(response, "choices", None)
+    if not choices:
+        raise LLMResponseError(
+            f"LLM {stage} response contained no choices."
+        )
+
+    choice = choices[0]
+    finish_reason = getattr(choice, "finish_reason", None)
+    if finish_reason == "length":
+        response_id = getattr(response, "id", None)
+        raise LLMResponseError(
+            f"LLM {stage} response was truncated at the token limit "
+            f"(finish_reason='length', response_id={response_id!r}).",
+            finish_reason=finish_reason,
+        )
+
+    message = getattr(choice, "message", None)
+    content = getattr(message, "content", None)
+    if content is None:
+        # A refusal is still useful assistant text; otherwise the response is
+        # unavailable and must not be scored as an empty answer.
+        content = getattr(message, "refusal", None)
+
+    if not isinstance(content, str) or not content.strip():
+        response_id = getattr(response, "id", None)
+        raise LLMResponseError(
+            f"LLM {stage} response contained no assistant text "
+            f"(finish_reason={finish_reason!r}, response_id={response_id!r}).",
+            finish_reason=finish_reason,
+        )
+    return content.strip()
 
 # confidence thresholds
 # below these — self healing kicks in
@@ -79,7 +176,23 @@ def classify_query_intent(query: str) -> dict:
     }
 
 
+def extract_statutory_section_reference(query: str) -> str | None:
+    """Return one explicit section reference in a stable searchable form."""
+    match = re.search(
+        r"\b(?:section|sec\.?)\s*(\d+)\s*[-‐‑‒–—−\s]*([A-Za-z]?)\b",
+        query,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return f"section {match.group(1)}{match.group(2).lower()}"
+
+
 def score_relevance(query: str, chunks: list[dict]) -> float:
+    """Return the mean reranker score linearly normalized to [0, 1].
+
+    This is a retrieval ranking score, not a probability of correctness.
+    """
     if not chunks:
         return 0.0
     scores = [c.get("rerank_score", 0) for c in chunks]
@@ -92,7 +205,8 @@ def score_relevance(query: str, chunks: list[dict]) -> float:
 
 def score_faithfulness(answer: str, chunks: list[dict]) -> float:
     """
-    Check if the generated answer is grounded in retrieved chunks.
+    Apply a narrow rule-based check for numeric and legal-reference claims.
+    This does not assess semantic entailment or legal correctness.
 
     Simple but effective approach:
     1. Extract key phrases from answer
@@ -100,12 +214,13 @@ def score_faithfulness(answer: str, chunks: list[dict]) -> float:
     3. Score = fraction of answer phrases found in sources
 
     Why not use RAGAS here?
-    RAGAS needs OpenAI. We use Groq.
+    RAGAS would require a separate judge integration. This rule-based
+    score is independent of the OpenRouter generation provider.
     This rule-based approach catches the most dangerous
     failure mode — numbers and names not in source.
 
-    Production note: in a real system you'd use an NLI model
-    for more accurate faithfulness scoring.
+    A zero means no extracted numeric/legal-reference claim matched the
+    retrieved text (or that the answer/chunk input was empty).
     """
     if not answer or not chunks:
         return 0.0
@@ -136,25 +251,72 @@ def score_faithfulness(answer: str, chunks: list[dict]) -> float:
 
 
 def rewrite_query(query: str, previous_results_summary: str) -> str:
-    prompt = f"""You are an Indian legal expert helping improve a search query for Indian court judgments.
+    prompt = f"""Rewrite the original as one concise search query for Indian court judgments.
+Preserve every legal/content term in the original and keep those terms in the
+same order. You may remove only articles (a, an, the). Do not add facts, parties,
+statutes, section numbers, case names, or assumptions absent from the original.
+Return only one query of at most 20 words, with no explanation, alternatives,
+markdown, or label.
 
-Original query: {query}
-
-Rewrite this query using:
-- Indian legal terminology (IPC, CrPC, BNSS, Indian Acts)
-- Specific Indian Act names and Section numbers if relevant
-- Alternative Indian legal terms for the same concept
-- Reference to Indian courts (High Court, Supreme Court of India)
-
-Return ONLY the rewritten query, nothing else."""
+Original query: {query}"""
 
     response = groq_client.chat.completions.create(
         model=LLM_MODEL,
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=100,
-        temperature=0.3
+        max_completion_tokens=512,
+        temperature=0,
+        reasoning_effort="low",
     )
-    rewritten = response.choices[0].message.content.strip()
+    rewritten = extract_response_text(response, "query rewrite")
+    words = rewritten.split()
+    original_lower = query.casefold()
+    articles = {"a", "an", "the"}
+
+    def content_tokens(text: str) -> list[str]:
+        return [
+            token.casefold()
+            for token in re.findall(r"\b[\w]+\b", text)
+            if token.casefold() not in articles
+        ]
+
+    preserves_query_terms = content_tokens(rewritten) == content_tokens(query)
+    reference_patterns = (
+        # Common Indian statute abbreviations and named legal instruments.
+        r"\b(?:IPC|CrPC|BNSS|BNS|IEA|BSA|CPC|Companies Act|"
+        r"Indian Penal Code|Code of Criminal Procedure|"
+        r"Constitution of India)\b",
+        r"\b(?:[A-Z][\w'-]*(?:\s+[A-Z][\w'-]*){0,5}\s+"
+        r"(?:Act|Code|Rules|Constitution))\b",
+        r"\b(?:section|sec\.?|article)\s+\d+[A-Za-z]?\b",
+        r"\b\d{4}\b",
+        # Case-name form, including common v./vs./versus spellings.
+        r"\b[A-Z][\w.&'-]*(?:\s+[A-Z][\w.&'-]*){0,5}\s+"
+        r"v(?:s\.?|ersus)\s+[A-Z][\w.&'-]*(?:\s+[A-Z][\w.&'-]*){0,5}\b",
+    )
+    unsupported_reference = any(
+        match.group(0).casefold() not in original_lower
+        for pattern in reference_patterns
+        for match in re.finditer(pattern, rewritten, flags=re.IGNORECASE)
+    )
+    unsupported_case_name = any(
+        match.group(0).casefold() not in original_lower
+        for match in re.finditer(
+            r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,4}\b", rewritten
+        )
+    )
+    if (
+        len(words) > 20
+        or "\n" in rewritten
+        or rewritten.startswith(("-", "*", "1.", "Query:"))
+        or rewritten.startswith(('"', "'"))
+        or rewritten.endswith(('"', "'"))
+        or not preserves_query_terms
+        or unsupported_reference
+        or unsupported_case_name
+    ):
+        raise LLMResponseError(
+            "LLM query rewrite response was not one safe, concise query."
+        )
     logger.info(f"Query rewritten: '{query}' → '{rewritten}'")
     return rewritten
 
@@ -165,7 +327,7 @@ def generate_answer(
     query_intent: dict
 ) -> str:
     """
-    Generate grounded answer using Groq LLM.
+    Generate a bounded, grounded answer using the configured Groq model.
     Context is assembled from retrieved chunks with source citations.
     """
     # assemble context with source information
@@ -186,7 +348,7 @@ STRICT RULES:
 2. Always cite which source supports each claim using [Source N]
 3. If the sources don't contain enough information, say so explicitly
 4. Never make up case names, section numbers, or legal facts
-5. Keep the answer focused and precise
+5. Keep the answer focused and precise; use no more than 400 words
 
 Question: {query}
 
@@ -198,11 +360,12 @@ Answer:"""
     response = groq_client.chat.completions.create(
         model=LLM_MODEL,
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=800,
-        temperature=0.1  # low temperature — factual legal answers
+        max_completion_tokens=LLM_MAX_OUTPUT_TOKENS,
+        temperature=0.1,  # low temperature — factual legal answers
+        reasoning_effort="low",
     )
 
-    return response.choices[0].message.content.strip()
+    return extract_response_text(response, "answer generation")
 
 
 def rag_query(
@@ -233,43 +396,138 @@ def rag_query(
     logger.info(f"Detected intent: {intent['detected_intent']}")
 
     # step 2 — retrieve
-    chunks = retriever.retrieve(
-        query=query,
-        top_k=top_k,
-        filter_case_type=filter_case_type or intent["case_type"],
-        filter_court_type=intent["court_type"]
+    requested_case_type = filter_case_type or intent["case_type"]
+    required_reference = extract_statutory_section_reference(query)
+    retrieval_diagnostics = {
+        "initial_chunk_ids": [],
+        "fallback_candidate_ids": [],
+        "fallback_chunk_ids": [],
+        "final_chunk_ids": [],
+        "fallback_activated": False,
+        "reference_recovered": False,
+        "fallback_error": None,
+    }
+    reference_retrieval = getattr(
+        type(retriever), "retrieve_with_reference_fallback", None
     )
+    if required_reference and reference_retrieval is not None:
+        chunks, retrieval_diagnostics = retriever.retrieve_with_reference_fallback(
+            query=query,
+            required_reference=required_reference,
+            top_k=top_k,
+            filter_case_type=requested_case_type,
+            # Keep explicit caller filters; remove only the inferred filter.
+            fallback_case_type=filter_case_type,
+            filter_court_type=intent["court_type"],
+        )
+    else:
+        chunks = retriever.retrieve(
+            query=query,
+            top_k=top_k,
+            filter_case_type=requested_case_type,
+            filter_court_type=intent["court_type"]
+        )
+        retrieval_diagnostics["initial_chunk_ids"] = [
+            c.get("metadata", {}).get("chunk_id") for c in chunks
+        ]
+        retrieval_diagnostics["final_chunk_ids"] = list(
+            retrieval_diagnostics["initial_chunk_ids"]
+        )
 
     # step 3 — score relevance
     relevance_score = score_relevance(query, chunks)
     logger.info(f"Relevance score: {relevance_score:.3f}")
 
     # step 4 — self-healing if relevance low
+    rewrite_attempted = False
+    rewrite_succeeded = False
+    rewrite_failed = False
+    retry_attempted = False
+    retry_succeeded = False
+    retry_failed = False
     healed = False
-    if relevance_score < RELEVANCE_THRESHOLD:
+    fallback_activated = retrieval_diagnostics.get("fallback_activated", False)
+    if fallback_activated:
+        # The reference fallback consumes the single recovery/retry budget.
+        retry_attempted = True
+        retry_failed = bool(retrieval_diagnostics.get("fallback_error"))
+        retry_succeeded = not retry_failed
+    if relevance_score < RELEVANCE_THRESHOLD and not fallback_activated:
         logger.warning(
             f"Low relevance ({relevance_score:.3f}) — triggering self-heal"
         )
 
         # rewrite query
-        rewritten_query = rewrite_query(query, "")
+        rewrite_attempted = True
+        retry_query = query
+        try:
+            rewritten_query = rewrite_query(query, "")
+            rewrite_succeeded = True
+            retry_query = rewritten_query
+        except Exception as exc:
+            rewrite_failed = True
+            logger.warning(
+                "Query rewrite failed (%s); retrying the original query with "
+                "the broader filter.", type(exc).__name__,
+            )
 
-        # retry with rewritten query and wider search (no filter)
-        chunks = retriever.retrieve(
-            query=rewritten_query,
-            top_k=top_k,
-            filter_case_type=filter_case_type,  # preserve caller filter
-            filter_court_type=None
-        )
+        # Retry once. A rewrite failure falls back to the original query.
+        retry_attempted = True
+        try:
+            chunks = retriever.retrieve(
+                query=retry_query,
+                top_k=top_k,
+                filter_case_type=filter_case_type,  # preserve caller filter
+                filter_court_type=None
+            )
+        except Exception as exc:
+            retry_failed = True
+            raise RAGGenerationError(
+                "Retry retrieval", relevance_score, False, exc,
+                rewrite_attempted=rewrite_attempted,
+                retry_attempted=retry_attempted,
+                rewrite_succeeded=rewrite_succeeded,
+                rewrite_failed=rewrite_failed,
+                retry_succeeded=retry_succeeded,
+                retry_failed=retry_failed,
+                retrieval_diagnostics=retrieval_diagnostics,
+            ) from exc
 
-        new_relevance = score_relevance(rewritten_query, chunks)
+        retry_succeeded = True
+        retrieval_diagnostics["final_chunk_ids"] = [
+            c.get("metadata", {}).get("chunk_id") for c in chunks
+        ]
+        new_relevance = score_relevance(retry_query, chunks)
         logger.info(f"Post-heal relevance: {new_relevance:.3f}")
 
-        healed = True
+        # A retry counts as a recovery only when it crosses the same threshold
+        # that triggered self-healing.
+        recovery_candidate = new_relevance >= RELEVANCE_THRESHOLD
         relevance_score = new_relevance
+    else:
+        recovery_candidate = bool(
+            fallback_activated
+            and retrieval_diagnostics.get("reference_recovered")
+            and not retrieval_diagnostics.get("fallback_error")
+        )
 
     # step 5 — generate answer
-    answer = generate_answer(query, chunks, intent)
+    try:
+        answer = generate_answer(query, chunks, intent)
+    except Exception as exc:
+        raise RAGGenerationError(
+            "Answer generation", relevance_score, False, exc,
+            rewrite_attempted=rewrite_attempted,
+            retry_attempted=retry_attempted,
+            rewrite_succeeded=rewrite_succeeded,
+            rewrite_failed=rewrite_failed,
+            retry_succeeded=retry_succeeded,
+            retry_failed=retry_failed,
+            retrieval_diagnostics=retrieval_diagnostics,
+        ) from exc
+
+    # Recovery requires adequate retry relevance and a completed answer.
+    healed = recovery_candidate
 
     # step 6 — score faithfulness
     faithfulness_score = score_faithfulness(answer, chunks)
@@ -304,6 +562,19 @@ def rag_query(
         "metadata": {
             "detected_intent": intent["detected_intent"],
             "self_healed": healed,
+            "rewrite_attempted": rewrite_attempted,
+            "rewrite_succeeded": rewrite_succeeded,
+            "rewrite_failed": rewrite_failed,
+            "retry_attempted": retry_attempted,
+            "retry_succeeded": retry_succeeded,
+            "retry_failed": retry_failed,
+            "initial_chunk_ids": retrieval_diagnostics.get("initial_chunk_ids", []),
+            "fallback_candidate_ids": retrieval_diagnostics.get("fallback_candidate_ids", []),
+            "fallback_chunk_ids": retrieval_diagnostics.get("fallback_chunk_ids", []),
+            "final_chunk_ids": retrieval_diagnostics.get("final_chunk_ids", []),
+            "fallback_activated": fallback_activated,
+            "reference_recovered": retrieval_diagnostics.get("reference_recovered", False),
+            "fallback_error": retrieval_diagnostics.get("fallback_error"),
             "chunks_retrieved": len(chunks),
             "model": LLM_MODEL
         },

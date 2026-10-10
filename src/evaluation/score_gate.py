@@ -1,4 +1,5 @@
 import json
+import math
 import sys
 import logging
 
@@ -16,6 +17,40 @@ THRESHOLDS = {
 }
 
 
+def meets_thresholds(summary: dict) -> bool:
+    """Return whether every required summary metric meets its threshold."""
+    for metric, threshold in THRESHOLDS.items():
+        actual = summary.get(metric)
+        if (
+            isinstance(actual, bool)
+            or not isinstance(actual, (int, float))
+            or not math.isfinite(actual)
+            or actual < threshold
+        ):
+            return False
+    return True
+
+
+def execution_passed(data: dict) -> bool:
+    """Require completed, non-empty answers when per-question results exist."""
+    summary = data.get("summary") or {}
+    declared_status = summary.get("execution_pass")
+    results = data.get("results")
+
+    if isinstance(results, list):
+        records_complete = all(
+            isinstance(result, dict)
+            and isinstance(result.get("answer"), str)
+            and bool(result["answer"].strip())
+            and result.get("answer_status", "completed") == "completed"
+            for result in results
+        )
+        return records_complete and declared_status is not False
+
+    # Summary-only input must explicitly state that execution completed.
+    return declared_status is True
+
+
 def check_gate(results_path: str) -> bool:
     """
     Read eval results and check against thresholds.
@@ -27,19 +62,25 @@ def check_gate(results_path: str) -> bool:
         data = json.load(f)
 
     summary = data["summary"]
-    passed = True
+    thresholds_passed = meets_thresholds(summary)
+    run_passed = execution_passed(data)
+    passed = thresholds_passed and run_passed
 
     logger.info("=== SCORE GATE CHECK ===")
     for metric, threshold in THRESHOLDS.items():
-        actual = summary.get(metric, 0.0)
+        actual = summary.get(metric)
+        if not isinstance(actual, (int, float)):
+            logger.error(f"{metric}: unavailable or invalid — cannot meet threshold")
+            continue
         status = "✓ PASS" if actual >= threshold else "✗ FAIL"
         logger.info(
             f"{metric}: {actual} "
             f"(threshold: {threshold}) — {status}"
         )
-        if actual < threshold:
-            passed = False
-
+    logger.info(
+        "Benchmark execution: "
+        f"{'complete' if run_passed else 'incomplete'}"
+    )
     if passed:
         logger.info("=== ALL CHECKS PASSED — PR approved ===")
     else:

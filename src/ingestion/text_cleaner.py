@@ -165,7 +165,7 @@ def process_all_judgments(dataset, output_path: str):
         # cleaned_text is what we use downstream
         processed.append(result)
 
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(processed, f, indent=2, ensure_ascii=False)
 
     logger.info(f"Processed: {len(processed)} judgments")
@@ -226,7 +226,7 @@ def process_rhetorical_spans(rhetorical_dataset, output_path: str):
                 "text_length": len(text)
             })
 
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(cleaned_spans, f, indent=2, ensure_ascii=False)
 
     logger.info(f"Clean spans: {len(cleaned_spans)}")

@@ -1,14 +1,25 @@
 import time
 import logging
 import os
+import threading
+from collections import defaultdict, deque
+from math import ceil
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, validator
 from typing import Optional
-import psycopg2
-from psycopg2.extras import RealDictCursor
+
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+except (ImportError, OSError):
+    # PostgreSQL is optional; a missing or blocked native driver must not
+    # prevent the API from serving retrieval and generation requests.
+    psycopg2 = None
+    RealDictCursor = None
 
 load_dotenv()
 logging.basicConfig(
@@ -16,6 +27,144 @@ logging.basicConfig(
     format="%(asctime)s — %(levelname)s — %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+QUERY_BODY_MAX_BYTES = 64 * 1024
+
+
+def _positive_int_setting(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a positive integer.") from exc
+    if value <= 0:
+        raise RuntimeError(f"{name} must be a positive integer.")
+    return value
+
+
+QUERY_RATE_LIMIT_REQUESTS = _positive_int_setting("QUERY_RATE_LIMIT_REQUESTS", 30)
+QUERY_RATE_LIMIT_WINDOW_SECONDS = _positive_int_setting(
+    "QUERY_RATE_LIMIT_WINDOW_SECONDS", 60
+)
+
+
+class RequestBodyLimitMiddleware:
+    """Bound POST /query bodies, including requests without Content-Length."""
+
+    def __init__(self, app, max_body_bytes: int = QUERY_BODY_MAX_BYTES):
+        self.app = app
+        self.max_body_bytes = max_body_bytes
+
+    async def __call__(self, scope, receive, send):
+        if not (
+            scope.get("type") == "http"
+            and scope.get("method") == "POST"
+            and scope.get("path") == "/query"
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers", []))
+        content_length = headers.get(b"content-length")
+        if content_length is not None:
+            try:
+                declared_size = int(content_length)
+            except ValueError:
+                declared_size = None  # Let the normal request parser reject it.
+            if declared_size is not None and declared_size > self.max_body_bytes:
+                await self._send_too_large(scope, receive, send)
+                return
+
+        body = bytearray()
+        more_body = True
+        while more_body:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            body.extend(message.get("body", b""))
+            if len(body) > self.max_body_bytes:
+                await self._send_too_large(scope, receive, send)
+                return
+            more_body = message.get("more_body", False)
+
+        body_bytes = bytes(body)
+        body_sent = False
+
+        async def receive_buffered():
+            nonlocal body_sent
+            if body_sent:
+                return {"type": "http.disconnect"}
+            body_sent = True
+            return {"type": "http.request", "body": body_bytes, "more_body": False}
+
+        await self.app(scope, receive_buffered, send)
+
+    async def _send_too_large(self, scope, receive, send):
+        response = JSONResponse(
+            status_code=413,
+            content={
+                "detail": (
+                    "Request body exceeds the "
+                    f"{self.max_body_bytes}-byte limit."
+                )
+            },
+        )
+        await response(scope, receive, send)
+
+
+class QueryRateLimitMiddleware:
+    """Apply a per-client in-memory sliding-window limit to POST /query."""
+
+    def __init__(
+        self,
+        app,
+        max_requests: int = QUERY_RATE_LIMIT_REQUESTS,
+        window_seconds: int = QUERY_RATE_LIMIT_WINDOW_SECONDS,
+    ):
+        if max_requests <= 0 or window_seconds <= 0:
+            raise ValueError("Rate-limit values must be positive integers.")
+        self.app = app
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.requests_by_client = defaultdict(deque)
+        self.lock = threading.Lock()
+
+    async def __call__(self, scope, receive, send):
+        if not (
+            scope.get("type") == "http"
+            and scope.get("method") == "POST"
+            and scope.get("path") == "/query"
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        client = scope.get("client")
+        client_id = client[0] if client else "unknown"
+        now = time.monotonic()
+        with self.lock:
+            cutoff = now - self.window_seconds
+            for key, timestamps in list(self.requests_by_client.items()):
+                while timestamps and timestamps[0] <= cutoff:
+                    timestamps.popleft()
+                if not timestamps:
+                    del self.requests_by_client[key]
+
+            timestamps = self.requests_by_client[client_id]
+            if len(timestamps) >= self.max_requests:
+                retry_after = max(1, ceil(timestamps[0] + self.window_seconds - now))
+            else:
+                timestamps.append(now)
+                retry_after = None
+
+        if retry_after is not None:
+            response = JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded. Please retry later."},
+                headers={"Retry-After": str(retry_after)},
+            )
+            await response(scope, receive, send)
+            return
+
+        await self.app(scope, receive, send)
 
 # global retriever — loaded once at startup
 retriever = None
@@ -55,6 +204,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(
+    QueryRateLimitMiddleware,
+    max_requests=QUERY_RATE_LIMIT_REQUESTS,
+    window_seconds=QUERY_RATE_LIMIT_WINDOW_SECONDS,
+)
+app.add_middleware(
+    RequestBodyLimitMiddleware,
+    max_body_bytes=QUERY_BODY_MAX_BYTES,
+)
+
+
+@app.exception_handler(Exception)
+async def safe_unexpected_error_handler(request: Request, exc: Exception):
+    """Return a stable error body without leaking exception details."""
+    logger.error("Unhandled API error (%s)", type(exc).__name__)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 
 # ── request/response models ──
@@ -63,7 +231,7 @@ class QueryRequest(BaseModel):
     query: str = Field(
         ...,
         min_length=10,
-        max_length=500,
+        max_length=4000,
         description="Legal question to answer",
         example="What are the conditions for granting anticipatory bail?"
     )
@@ -77,6 +245,12 @@ class QueryRequest(BaseModel):
         default=None,
         description="Filter by case type: Criminal, Land&Property, Tax, etc."
     )
+
+    @validator("query")
+    def query_must_not_be_blank(cls, value):
+        if not value.strip():
+            raise ValueError("query must not be empty or whitespace-only")
+        return value
 
 
 class SourceDocument(BaseModel):
@@ -121,10 +295,8 @@ class QueryResponse(BaseModel):
 def estimate_cost(query: str, answer: str, model: str) -> float:
     """
     Estimate cost per query.
-    Groq free tier = $0.00 for now.
-    Track it anyway — shows cost awareness in interviews.
+    This rough estimate uses fixed rates and does not query OpenRouter pricing.
     Formula: (input_tokens + output_tokens) * price_per_token
-    Groq llama-3.1-8b: $0.05 per million input, $0.08 per million output
     """
     input_tokens = len(query) / 4  # rough: 1 token ≈ 4 chars
     output_tokens = len(answer) / 4
@@ -154,6 +326,9 @@ def log_to_postgres(
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         return  # skip if postgres not configured
+    if psycopg2 is None:
+        logger.warning("PostgreSQL logging skipped: driver unavailable")
+        return
 
     conn = None
     cur = None
@@ -178,19 +353,19 @@ def log_to_postgres(
         ))
         conn.commit()
     except Exception as e:
-        logger.warning(f"Failed to log to postgres: {e}")
+        logger.warning("Failed to log to PostgreSQL (%s)", type(e).__name__)
         # never crash the API because of logging failure
     finally:
         if cur is not None:
             try:
                 cur.close()
             except Exception as e:
-                logger.warning(f"Failed to close postgres cursor: {e}")
+                logger.warning("Failed to close PostgreSQL cursor (%s)", type(e).__name__)
         if conn is not None:
             try:
                 conn.close()
             except Exception as e:
-                logger.warning(f"Failed to close postgres connection: {e}")
+                logger.warning("Failed to close PostgreSQL connection (%s)", type(e).__name__)
 
 
 # ── endpoints ──
@@ -227,44 +402,60 @@ async def query_endpoint(request: QueryRequest):
             top_k=request.top_k,
             filter_case_type=request.filter_case_type
         )
-    except Exception as e:
-        logger.error(f"RAG query failed: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Query processing failed: {str(e)}"
+        latency_ms = round((time.time() - start_time) * 1000, 2)
+        cost_usd = estimate_cost(
+            request.query,
+            result["answer"],
+            result["metadata"]["model"]
         )
 
-    latency_ms = round((time.time() - start_time) * 1000, 2)
-    cost_usd = estimate_cost(
-        request.query,
-        result["answer"],
-        result["metadata"]["model"]
-    )
+        # Database logging is optional and must not discard a successful answer.
+        try:
+            log_to_postgres(
+                query=request.query,
+                answer=result["answer"],
+                relevance=result["scores"]["relevance"],
+                faithfulness=result["scores"]["faithfulness"],
+                latency_ms=latency_ms,
+                cost_usd=cost_usd,
+                self_healed=result["metadata"]["self_healed"],
+                detected_intent=result["metadata"]["detected_intent"]
+            )
+        except Exception as e:
+            logger.warning("Optional PostgreSQL logging failed (%s)", type(e).__name__)
 
-    # log to postgres asynchronously
-    log_to_postgres(
-        query=request.query,
-        answer=result["answer"],
-        relevance=result["scores"]["relevance"],
-        faithfulness=result["scores"]["faithfulness"],
-        latency_ms=latency_ms,
-        cost_usd=cost_usd,
-        self_healed=result["metadata"]["self_healed"],
-        detected_intent=result["metadata"]["detected_intent"]
-    )
-
-    return QueryResponse(
-        query=result["query"],
-        answer=result["answer"],
-        sources=[SourceDocument(**s) for s in result["sources"]],
-        scores=QueryScores(**result["scores"]),
-        metadata=QueryMetadata(
-            **result["metadata"],
-            latency_ms=latency_ms,
-            cost_usd=cost_usd
-        ),
-        warning=result.get("warning")
-    )
+        return QueryResponse(
+            query=result["query"],
+            answer=result["answer"],
+            sources=[SourceDocument(**s) for s in result["sources"]],
+            scores=QueryScores(**result["scores"]),
+            metadata=QueryMetadata(
+                **result["metadata"],
+                latency_ms=latency_ms,
+                cost_usd=cost_usd
+            ),
+            warning=result.get("warning")
+        )
+    except Exception as e:
+        stage = getattr(e, "stage", None)
+        cause = getattr(e, "cause", e)
+        if stage == "Answer generation":
+            logger.warning("RAG answer generation failed (%s)", type(cause).__name__)
+            raise HTTPException(
+                status_code=502,
+                detail="The language model could not complete the response. Please retry.",
+            ) from e
+        if stage == "Retry retrieval":
+            logger.warning("RAG retrieval recovery failed (%s)", type(cause).__name__)
+            raise HTTPException(
+                status_code=503,
+                detail="Retrieval is temporarily unavailable. Please retry.",
+            ) from e
+        logger.error("RAG query failed (%s)", type(e).__name__)
+        raise HTTPException(
+            status_code=500,
+            detail="Query processing failed. Please retry.",
+        ) from e
 
 
 @app.get("/stats")
@@ -276,6 +467,9 @@ async def stats():
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         return {"message": "PostgreSQL not configured"}
+    if psycopg2 is None:
+        logger.warning("Stats unavailable: PostgreSQL driver unavailable")
+        return {"message": "PostgreSQL unavailable"}
 
     conn = None
     cur = None
@@ -303,16 +497,16 @@ async def stats():
         return {"stats": [dict(r) for r in rows]}
 
     except Exception as e:
-        logger.warning(f"Stats unavailable because PostgreSQL failed: {e}")
+        logger.warning("Stats unavailable because PostgreSQL failed (%s)", type(e).__name__)
         return {"message": "PostgreSQL unavailable"}
     finally:
         if cur is not None:
             try:
                 cur.close()
             except Exception as e:
-                logger.warning(f"Failed to close postgres cursor: {e}")
+                logger.warning("Failed to close PostgreSQL cursor (%s)", type(e).__name__)
         if conn is not None:
             try:
                 conn.close()
             except Exception as e:
-                logger.warning(f"Failed to close postgres connection: {e}")
+                logger.warning("Failed to close PostgreSQL connection (%s)", type(e).__name__)

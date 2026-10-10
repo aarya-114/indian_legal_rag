@@ -83,6 +83,18 @@ def build_metadata(chunk: dict) -> dict:
     }
 
 
+def verify_collection_count(collection, expected_count: int) -> int:
+    actual_count = collection.count()
+    logger.info("Expected chunk count: %d", expected_count)
+    logger.info("Actual Chroma collection count: %d", actual_count)
+    if actual_count != expected_count:
+        raise RuntimeError(
+            "Chroma collection count mismatch: "
+            f"expected {expected_count}, found {actual_count}"
+        )
+    return actual_count
+
+
 def embed_and_store_chunks(
     chunks_path: str,
     max_chunks: int = None,
@@ -92,7 +104,7 @@ def embed_and_store_chunks(
     Embed all chunks and store in ChromaDB.
     Completely free — runs on local CPU.
     """
-    with open(chunks_path) as f:
+    with open(chunks_path, encoding="utf-8") as f:
         chunks = json.load(f)
 
     if max_chunks:
@@ -116,6 +128,7 @@ def embed_and_store_chunks(
 
     if not new_chunks:
         logger.info("Nothing to embed — already complete")
+        verify_collection_count(collection, len(chunks))
         return collection
 
     total_embedded = 0
@@ -158,7 +171,7 @@ def embed_and_store_chunks(
     elapsed = time.time() - start_time
     logger.info(f"Done — {total_embedded} chunks in {elapsed:.1f}s")
     logger.info(f"Cost: $0.00 — local model")
-    logger.info(f"Collection size: {collection.count()}")
+    verify_collection_count(collection, len(chunks))
     return collection
 
 
