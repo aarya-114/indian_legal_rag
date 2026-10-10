@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#11263b">
+  <meta name="description" content="Research Indian court judgments with a source-grounded legal research prototype.">
+  <title>Indian Legal RAG — Judgment Research</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="config.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="Indian Legal RAG home">
+      <span class="brand-mark" aria-hidden="true">§</span>
+      <span>Indian Legal <span class="brand-light">Research</span></span>
+    </a>
+    <span class="prototype-tag">Research prototype</span>
+  </header>
+
+  <main id="top" class="page-shell">
+    <section class="intro" aria-labelledby="page-title">
+      <p class="eyebrow">Judgment research assistant</p>
+      <h1 id="page-title">Find relevant Indian court judgments.</h1>
+      <p class="intro-copy">Ask a legal research question to search the local judgment collection and receive an answer with source references.</p>
+    </section>
+
+    <section class="search-panel" aria-labelledby="question-heading">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">New research query</p>
+          <h2 id="question-heading">What would you like to know?</h2>
+        </div>
+        <span class="step-mark" aria-hidden="true">01</span>
+      </div>
+      <form id="query-form">
+        <label for="query">Legal question</label>
+        <textarea id="query" name="query" rows="4" minlength="10" maxlength="4000" required
+          placeholder="For example: What principles guide the grant of anticipatory bail?"
+          aria-describedby="query-help query-count"></textarea>
+        <div class="input-foot">
+          <span id="query-help">Use a specific question for focused results.</span>
+          <span id="query-count" aria-live="polite">0 / 4,000</span>
+        </div>
+        <div class="form-actions">
+          <p class="privacy-note"><span class="status-dot" aria-hidden="true"></span>Research request sent to your configured API</p>
+          <button id="submit-button" type="submit">
+            <span class="button-label">Search judgments</span>
+            <span class="button-arrow" aria-hidden="true">→</span>
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <p id="request-status" class="request-status" role="status" aria-live="polite"></p>
+
+    <section id="results" class="results" aria-label="Research results" hidden>
+      <div class="results-heading">
+        <div>
+          <p class="eyebrow">Research response</p>
+          <h2>Answer and sources</h2>
+        </div>
+        <span id="result-intent" class="intent-pill" hidden></span>
+      </div>
+
+      <div id="warning" class="warning" role="status" hidden></div>
+
+      <article class="answer-card">
+        <div class="card-kicker"><span class="kicker-line"></span>Grounded answer</div>
+        <p id="answer-text" class="answer-text"></p>
+      </article>
+
+      <section class="metrics-section" aria-labelledby="metrics-heading">
+        <div class="section-heading">
+          <h3 id="metrics-heading">Query details</h3>
+          <span class="section-rule"></span>
+        </div>
+        <dl id="metrics" class="metrics-grid"></dl>
+      </section>
+
+      <section class="sources-section" aria-labelledby="sources-heading">
+        <div class="section-heading">
+          <h3 id="sources-heading">Retrieved judgments</h3>
+          <span id="source-count" class="source-count"></span>
+        </div>
+        <div id="sources" class="source-list"></div>
+        <p id="empty-sources" class="empty-sources" hidden>No source details were returned for this response.</p>
+      </section>
+
+      <aside id="disclaimer" class="disclaimer" aria-label="Legal disclaimer"></aside>
+    </section>
+
+    <footer class="page-footer">
+      <span>Indian Legal RAG</span>
+      <span>For research assistance only</span>
+    </footer>
+  </main>
+</body>
+</html>
