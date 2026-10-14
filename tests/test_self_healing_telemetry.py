@@ -25,8 +25,8 @@ retrieval.print_results = lambda *args, **kwargs: None
 sys.modules.setdefault("src.retrieval.hybrid_retriever", retrieval)
 os.environ["GROQ_API_KEY"] = "test-key"
 os.environ["LLM_REQUEST_TIMEOUT_SECONDS"] = "37"
-os.environ["LLM_MAX_OUTPUT_TOKENS"] = "900"
-os.environ["LLM_MAX_REWRITE_TOKENS"] = "1800"
+os.environ["LLM_MAX_OUTPUT_TOKENS"] = "1024"
+os.environ["LLM_MAX_REWRITE_TOKENS"] = "2048"
 os.environ.setdefault("LLM_MODEL", "test-model")
 
 from src.api import rag_pipeline
@@ -107,8 +107,8 @@ class SelfHealingTelemetryTests(unittest.TestCase):
         self.assertEqual(answer, "Grounded legal answer")
         request = client.chat.completions.create.call_args.kwargs
         self.assertEqual(request["model"], rag_pipeline.LLM_MODEL)
-        self.assertEqual(rag_pipeline.LLM_MAX_OUTPUT_TOKENS, 900)
-        self.assertEqual(rag_pipeline.LLM_MAX_REWRITE_TOKENS, 1800)
+        self.assertEqual(rag_pipeline.LLM_MAX_OUTPUT_TOKENS, 1024)
+        self.assertEqual(rag_pipeline.LLM_MAX_REWRITE_TOKENS, 2048)
         self.assertEqual(
             request["max_completion_tokens"],
             rag_pipeline.LLM_MAX_OUTPUT_TOKENS,
@@ -160,6 +160,22 @@ class SelfHealingTelemetryTests(unittest.TestCase):
         self.assertEqual(caught.exception.stage, "Answer generation")
         self.assertIsInstance(caught.exception.cause, TimeoutError)
         self.assertFalse(caught.exception.retry_attempted)
+
+    def test_missing_or_non_numeric_optional_retrieval_timings_default_to_zero(self):
+        retriever = Mock()
+        retriever.retrieve.return_value = [chunk(1)]
+        retriever.get_stage_timings.return_value = Mock()
+
+        result = self.run_query(retriever, None)
+
+        timings = result["metadata"]["timings_ms"]
+        for stage in (
+            "initial_dense_retrieval_ms",
+            "initial_sparse_retrieval_ms",
+            "initial_rrf_fusion_ms",
+            "initial_cross_encoder_reranking_ms",
+        ):
+            self.assertEqual(timings[stage], 0.0)
 
     def test_rewrite_returns_short_assistant_query_with_bounded_request(self):
         response = types.SimpleNamespace(

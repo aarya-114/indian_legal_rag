@@ -3,6 +3,9 @@ import logging
 import json
 import re
 import time
+from collections.abc import Mapping
+from math import isfinite
+from numbers import Real
 from urllib.parse import urlsplit, urlunsplit
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -89,6 +92,19 @@ class RAGGenerationError(RuntimeError):
         self.retrieval_diagnostics = retrieval_diagnostics or {}
         self.cause = cause
         super().__init__(f"{stage} failed after retrieval: {cause}")
+
+
+def _stage_duration_ms(stages, name: str) -> float:
+    """Return a finite, non-negative stage duration or zero if unavailable."""
+    if not isinstance(stages, Mapping):
+        return 0.0
+    value = stages.get(name, 0.0)
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return 0.0
+    value = float(value)
+    if not isfinite(value) or value < 0:
+        return 0.0
+    return round(value, 3)
 
 
 def extract_response_text(response, stage: str) -> str:
@@ -554,8 +570,11 @@ def rag_query(
     initial_stages = get_timings() if callable(get_timings) else {}
     if retrieval_diagnostics.get("initial_timings") is not None:
         initial_stages = retrieval_diagnostics["initial_timings"]
-        initial_retrieval_ms = retrieval_diagnostics.get(
-            "initial_retrieval_ms", initial_retrieval_ms,
+        initial_retrieval_ms = _stage_duration_ms(
+            {"value": retrieval_diagnostics.get(
+                "initial_retrieval_ms", initial_retrieval_ms,
+            )},
+            "value",
         )
 
     # step 3 — score relevance
@@ -583,7 +602,10 @@ def rag_query(
         retry_attempted = True
         retry_failed = bool(retrieval_diagnostics.get("fallback_error"))
         retry_succeeded = not retry_failed
-        retry_retrieval_ms = retrieval_diagnostics.get("fallback_retrieval_ms", 0.0)
+        retry_retrieval_ms = _stage_duration_ms(
+            {"value": retrieval_diagnostics.get("fallback_retrieval_ms", 0.0)},
+            "value",
+        )
         retry_stages = retrieval_diagnostics.get("fallback_timings", {})
     if relevance_score < RELEVANCE_THRESHOLD and not fallback_activated:
         logger.warning(
@@ -715,19 +737,21 @@ def rag_query(
             "retained_explicit" if filter_case_type else "removed_inferred"
         )
     timing_fields = {
-        "initial_retrieval_ms": round(initial_retrieval_ms, 3),
-        "initial_dense_retrieval_ms": round(initial_stages.get("dense_retrieval_ms", 0.0), 3),
-        "initial_sparse_retrieval_ms": round(initial_stages.get("sparse_retrieval_ms", 0.0), 3),
-        "initial_rrf_fusion_ms": round(initial_stages.get("rrf_fusion_ms", 0.0), 3),
-        "initial_cross_encoder_reranking_ms": round(initial_stages.get("cross_encoder_reranking_ms", 0.0), 3),
-        "query_rewriting_ms": round(rewrite_query_ms, 3),
-        "retry_retrieval_ms": round(retry_retrieval_ms, 3),
-        "retry_dense_retrieval_ms": round(retry_stages.get("dense_retrieval_ms", 0.0), 3),
-        "retry_sparse_retrieval_ms": round(retry_stages.get("sparse_retrieval_ms", 0.0), 3),
-        "retry_rrf_fusion_ms": round(retry_stages.get("rrf_fusion_ms", 0.0), 3),
-        "retry_cross_encoder_reranking_ms": round(retry_stages.get("cross_encoder_reranking_ms", 0.0), 3),
-        "answer_generation_ms": round(answer_generation_ms, 3),
-        "faithfulness_check_ms": round(faithfulness_check_ms, 3),
+        "initial_retrieval_ms": _stage_duration_ms(
+            {"value": initial_retrieval_ms}, "value",
+        ),
+        "initial_dense_retrieval_ms": _stage_duration_ms(initial_stages, "dense_retrieval_ms"),
+        "initial_sparse_retrieval_ms": _stage_duration_ms(initial_stages, "sparse_retrieval_ms"),
+        "initial_rrf_fusion_ms": _stage_duration_ms(initial_stages, "rrf_fusion_ms"),
+        "initial_cross_encoder_reranking_ms": _stage_duration_ms(initial_stages, "cross_encoder_reranking_ms"),
+        "query_rewriting_ms": _stage_duration_ms({"value": rewrite_query_ms}, "value"),
+        "retry_retrieval_ms": _stage_duration_ms({"value": retry_retrieval_ms}, "value"),
+        "retry_dense_retrieval_ms": _stage_duration_ms(retry_stages, "dense_retrieval_ms"),
+        "retry_sparse_retrieval_ms": _stage_duration_ms(retry_stages, "sparse_retrieval_ms"),
+        "retry_rrf_fusion_ms": _stage_duration_ms(retry_stages, "rrf_fusion_ms"),
+        "retry_cross_encoder_reranking_ms": _stage_duration_ms(retry_stages, "cross_encoder_reranking_ms"),
+        "answer_generation_ms": _stage_duration_ms({"value": answer_generation_ms}, "value"),
+        "faithfulness_check_ms": _stage_duration_ms({"value": faithfulness_check_ms}, "value"),
         "total_pipeline_ms": round((time.perf_counter() - pipeline_started) * 1000, 3),
     }
     trace = {

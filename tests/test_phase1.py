@@ -333,12 +333,33 @@ class PhaseOneTests(unittest.TestCase):
             "create",
             return_value=response,
         ) as create_call:
-            rag_pipeline.rag_query("Explain the applicable legal test", retriever, filter_case_type="Tax")
+            result = rag_pipeline.rag_query(
+                "Explain the applicable legal test", retriever,
+                filter_case_type="Tax",
+            )
         self.assertEqual(retriever.retrieve.call_args.kwargs["filter_case_type"], "Tax")
+        timings = result["metadata"]["timings_ms"]
+        for name in (
+            "initial_dense_retrieval_ms",
+            "initial_sparse_retrieval_ms",
+            "initial_rrf_fusion_ms",
+            "initial_cross_encoder_reranking_ms",
+        ):
+            self.assertEqual(timings[name], 0.0)
         self.assertEqual(
             create_call.call_args.kwargs["model"],
             os.environ["LLM_MODEL"],
         )
+
+    def test_invalid_optional_stage_timings_default_to_zero(self):
+        for value in (Mock(), None, "invalid", float("nan"), -1):
+            with self.subTest(value_type=type(value).__name__):
+                self.assertEqual(
+                    rag_pipeline._stage_duration_ms(
+                        {"dense_retrieval_ms": value}, "dense_retrieval_ms",
+                    ),
+                    0.0,
+                )
 
     def test_api_forwards_filter_case_type(self):
         request = main.QueryRequest(query="Explain anticipatory bail conditions", filter_case_type="Criminal")
