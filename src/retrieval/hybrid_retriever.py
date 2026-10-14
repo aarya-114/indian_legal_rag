@@ -8,6 +8,8 @@ from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from rank_bm25 import BM25Okapi
 import re
+import threading
+import time
 
 load_dotenv()
 logging.basicConfig(
@@ -92,6 +94,33 @@ class HybridRetriever:
         self.bm25 = BM25Okapi(tokenized_corpus)
         self.chunk_ids = [c['chunk_id'] for c in self.all_chunks]
         logger.info(f"BM25 index built — {len(self.all_chunks)} documents")
+
+    def reset_stage_timings(self):
+        """Start a per-thread timing snapshot for one retrieval attempt."""
+        self._timing_state = getattr(self, "_timing_state", threading.local())
+        self._timing_state.stages = {
+            "dense_retrieval_ms": 0.0,
+            "sparse_retrieval_ms": 0.0,
+            "rrf_fusion_ms": 0.0,
+            "cross_encoder_reranking_ms": 0.0,
+        }
+
+    def get_stage_timings(self) -> dict:
+        state = getattr(self, "_timing_state", None)
+        return dict(getattr(state, "stages", {}))
+
+    def _measure_stage(self, name: str, operation, *args, **kwargs):
+        state = getattr(self, "_timing_state", None)
+        if state is None:
+            self.reset_stage_timings()
+            state = self._timing_state
+        start = time.perf_counter()
+        try:
+            return operation(*args, **kwargs)
+        finally:
+            state.stages[name] = state.stages.get(name, 0.0) + (
+                time.perf_counter() - start
+            ) * 1000
 
     def dense_search(
         self,
@@ -342,11 +371,11 @@ class HybridRetriever:
         filter_year: str = None,
     ) -> tuple[list[dict], list[dict]]:
         """Return the dense and BM25 top-20 lists before fusion/reranking."""
-        dense = self.dense_search(
+        dense = self._measure_stage("dense_retrieval_ms", self.dense_search,
             query, n_results=20, filter_case_type=filter_case_type,
             filter_court_type=filter_court_type, filter_year=filter_year,
         )
-        sparse = self.sparse_search(
+        sparse = self._measure_stage("sparse_retrieval_ms", self.sparse_search,
             query, n_results=20, filter_case_type=filter_case_type,
             filter_court_type=filter_court_type, filter_year=filter_year,
         )
@@ -360,10 +389,15 @@ class HybridRetriever:
         top_k: int,
         use_reranker: bool,
     ) -> list[dict]:
-        fused = self.reciprocal_rank_fusion(dense, sparse)
+        fused = self._measure_stage(
+            "rrf_fusion_ms", self.reciprocal_rank_fusion, dense, sparse
+        )
         candidates = fused[:20]
         if use_reranker and candidates:
-            return self.rerank(query, candidates, top_k=top_k)
+            return self._measure_stage(
+                "cross_encoder_reranking_ms", self.rerank,
+                query, candidates, top_k=top_k,
+            )
         return candidates[:top_k]
 
     @staticmethod
@@ -416,6 +450,7 @@ class HybridRetriever:
         contain only an explicitly supplied caller filter; inferred filters
         are removed for the fallback.
         """
+        initial_started = time.perf_counter()
         dense_initial, sparse_initial = self._retrieve_candidates(
             query, filter_case_type, filter_court_type, filter_year
         )
@@ -427,6 +462,8 @@ class HybridRetriever:
             self._contains_reference(c.get("text", ""), required_reference)
             for c in initial
         )
+        initial_retrieval_ms = (time.perf_counter() - initial_started) * 1000
+        initial_timings = self.get_stage_timings()
         diagnostics = {
             "initial_chunk_ids": initial_ids,
             "fallback_activated": False,
@@ -435,11 +472,19 @@ class HybridRetriever:
             "final_chunk_ids": initial_ids,
             "reference_recovered": initial_reference_found,
             "fallback_error": None,
+            "initial_chunks": initial,
+            "final_chunks": initial,
+            "initial_retrieval_ms": initial_retrieval_ms,
+            "initial_timings": initial_timings,
+            "fallback_retrieval_ms": 0.0,
+            "fallback_timings": {},
         }
         if initial_reference_found:
             return initial, diagnostics
 
         diagnostics["fallback_activated"] = True
+        self.reset_stage_timings()
+        fallback_started = time.perf_counter()
         try:
             dense_fallback, sparse_fallback = self._retrieve_candidates(
                 query, fallback_case_type, filter_court_type, filter_year
@@ -462,15 +507,24 @@ class HybridRetriever:
                 c.get("metadata", {}).get("chunk_id") for c in final
             ]
             diagnostics["final_chunk_ids"] = diagnostics["fallback_chunk_ids"]
+            diagnostics["final_chunks"] = final
             diagnostics["reference_recovered"] = any(
                 self._contains_reference(c.get("text", ""), required_reference)
                 for c in final
             )
+            diagnostics["fallback_retrieval_ms"] = (
+                time.perf_counter() - fallback_started
+            ) * 1000
+            diagnostics["fallback_timings"] = self.get_stage_timings()
             return final, diagnostics
         except Exception as exc:
             # Initial evidence remains available; callers can safely abstain
             # using it while telemetry records that fallback failed.
             diagnostics["fallback_error"] = str(exc)
+            diagnostics["fallback_retrieval_ms"] = (
+                time.perf_counter() - fallback_started
+            ) * 1000
+            diagnostics["fallback_timings"] = self.get_stage_timings()
             return initial, diagnostics
 
 

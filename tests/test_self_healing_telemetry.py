@@ -336,6 +336,89 @@ class SelfHealingTelemetryTests(unittest.TestCase):
         self.assertFalse(result["metadata"]["retry_attempted"])
         self.assertFalse(result["metadata"]["self_healed"])
 
+    def test_retry_success_is_distinct_from_successful_recovery(self):
+        retriever = SequenceRetriever([chunk(-1)], [chunk(-2)])
+        result = self.run_query(retriever, "rewritten question")
+
+        self.assertTrue(result["metadata"]["retry_attempted"])
+        # Retrieval returned successfully, though its relevance stayed below
+        # the recovery threshold and self_healed therefore remains false.
+        self.assertTrue(result["metadata"]["retry_succeeded"])
+        self.assertFalse(result["metadata"]["self_healed"])
+
+    def test_diagnostics_log_filter_state_bounded_provenance_and_timings(self):
+        retrieved = chunk(1)
+        retrieved["text"] = "Evidence " + ("x" * 500)
+        retrieved["metadata"].update({
+            "chunk_id": "judgment_123_chunk_0001",
+            "doc_url": "HTTPS://user:private@EXAMPLE.COM/case/123/?token=private#section",
+            "case_type": "Criminal",
+        })
+        retriever = SequenceRetriever([chunk(-1)], [retrieved])
+        with patch.dict(os.environ, {"RAG_DIAGNOSTICS": "true"}):
+            with self.assertLogs(rag_pipeline.logger, level="INFO") as captured:
+                with (
+                    patch.object(rag_pipeline, "rewrite_query", return_value="rewritten legal question"),
+                    patch.object(rag_pipeline, "generate_answer", return_value="Answer"),
+                    patch.object(rag_pipeline, "score_faithfulness", return_value=0.8),
+                ):
+                    result = rag_pipeline.rag_query("anticipatory bail", retriever)
+
+        trace_line = next(
+            line for line in captured.output if "rag_diagnostics=" in line
+        )
+        trace = json.loads(trace_line.split("rag_diagnostics=", 1)[1])
+        self.assertEqual(trace["rewritten_query"], "rewritten legal question")
+        self.assertEqual(
+            trace["case_type_filter"],
+            {
+                "initial_status": "applied_inferred",
+                "initial_value": "Criminal",
+                "retry_status": "removed_inferred",
+                "retry_value": None,
+            },
+        )
+        final_chunk = trace["final_chunks"][0]
+        self.assertEqual(final_chunk["chunk_id"], "judgment_123_chunk_0001")
+        self.assertEqual(final_chunk["document_url"], "https://example.com/case/123")
+        self.assertEqual(final_chunk["case_type"], "Criminal")
+        self.assertEqual(final_chunk["rerank_score"], 1)
+        self.assertLessEqual(len(final_chunk["excerpt"]), 240)
+        self.assertNotIn("token=private", trace_line)
+        self.assertNotIn("user:private", trace_line)
+        self.assertEqual(trace["initial_chunks"][0]["chunk_id"], None)
+
+        expected_timings = {
+            "initial_dense_retrieval_ms", "initial_sparse_retrieval_ms",
+            "initial_rrf_fusion_ms", "initial_cross_encoder_reranking_ms",
+            "query_rewriting_ms", "retry_retrieval_ms",
+            "retry_dense_retrieval_ms", "retry_sparse_retrieval_ms",
+            "retry_rrf_fusion_ms", "retry_cross_encoder_reranking_ms",
+            "answer_generation_ms", "faithfulness_check_ms", "total_pipeline_ms",
+        }
+        self.assertTrue(expected_timings.issubset(result["metadata"]["timings_ms"]))
+        self.assertGreaterEqual(result["metadata"]["timings_ms"]["total_pipeline_ms"], 0)
+
+    def test_explicit_case_type_filter_is_retained_in_retry_diagnostics(self):
+        retriever = SequenceRetriever([chunk(-1)], [chunk(2)])
+        with patch.dict(os.environ, {"RAG_DIAGNOSTICS": "true"}):
+            with self.assertLogs(rag_pipeline.logger, level="INFO") as captured:
+                with (
+                    patch.object(rag_pipeline, "rewrite_query", side_effect=RuntimeError("rewrite")),
+                    patch.object(rag_pipeline, "generate_answer", return_value="Answer"),
+                    patch.object(rag_pipeline, "score_faithfulness", return_value=0.8),
+                ):
+                    rag_pipeline.rag_query(
+                        "A legal question", retriever, filter_case_type="Criminal",
+                    )
+        trace_line = next(
+            line for line in captured.output if "rag_diagnostics=" in line
+        )
+        trace = json.loads(trace_line.split("rag_diagnostics=", 1)[1])
+        self.assertEqual(trace["case_type_filter"]["initial_status"], "retained_explicit")
+        self.assertEqual(trace["case_type_filter"]["retry_status"], "retained_explicit")
+        self.assertEqual(trace["case_type_filter"]["retry_value"], "Criminal")
+
     def test_faithfulness_zero_means_no_extracted_reference_matched(self):
         source = [{"text": "The court considered Section 12 of the relevant Act."}]
         self.assertEqual(

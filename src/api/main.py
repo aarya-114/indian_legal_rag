@@ -280,6 +280,9 @@ class QueryMetadata(BaseModel):
     model: str
     latency_ms: float
     cost_usd: float
+    retry_attempted: bool = False
+    retry_succeeded: bool = False
+    timings_ms: dict[str, float] = Field(default_factory=dict)
 
 
 class QueryResponse(BaseModel):

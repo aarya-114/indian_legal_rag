@@ -114,22 +114,41 @@
   function renderResponse(data) {
     const answer = typeof data.answer === "string" ? data.answer.trim() : "";
     const sourceItems = Array.isArray(data.sources) ? data.sources : [];
-    const sourceIds = new Set(sourceItems
-      .map((item) => item && item.source_id)
-      .filter((id) => typeof id === "string" && /^\d+$/.test(id)));
+    const sourcesById = new Map();
+    for (const source of sourceItems) {
+      if (!source || typeof source !== "object") continue;
+      const id = typeof source.source_id === "string" ? source.source_id : "";
+      if (/^\d+$/.test(id) && !sourcesById.has(id)) {
+        sourcesById.set(id, {
+          ...source,
+          safeUrl: validatedHttpUrl(source.url),
+        });
+      }
+    }
     const citationValidation = data.citation_validation && typeof data.citation_validation === "object"
       ? data.citation_validation
       : {};
-    const unknownIds = Array.isArray(citationValidation.unknown_source_ids)
-      ? citationValidation.unknown_source_ids.filter((id) => /^\d+$/.test(String(id)))
-      : [];
+    const unknownIds = new Set(
+      Array.isArray(citationValidation.unknown_source_ids)
+        ? citationValidation.unknown_source_ids
+          .map(String).filter((id) => /^\d+$/.test(id))
+        : [],
+    );
+    for (const match of answer.matchAll(/\[\s*Source\s+(\d+)(?:\s*:[^\]]*)?\s*\]/gi)) {
+      if (!sourcesById.has(match[1])) unknownIds.add(match[1]);
+    }
+    for (const match of answer.matchAll(/\bSources?\s+\d+(?:\s*(?:,|and|&)\s*\d+)*/gi)) {
+      for (const id of match[0].match(/\d+/g) || []) {
+        if (!sourcesById.has(id)) unknownIds.add(id);
+      }
+    }
 
-    renderAnswer(answer, sourceIds, new Set(unknownIds.map(String)));
+    renderAnswer(answer, sourcesById, unknownIds);
     renderSources(sourceItems);
     renderDiagnostics(data.scores, data.metadata, sourceItems);
 
-    if (unknownIds.length) {
-      citationWarning.textContent = `The answer refers to source ID${unknownIds.length === 1 ? "" : "s"} that could not be matched to a retrieved judgment: ${unknownIds.map((id) => `[Source ${id}]`).join(", ")}. These references are not linked.`;
+    if (unknownIds.size) {
+      citationWarning.textContent = `The answer refers to source ID${unknownIds.size === 1 ? "" : "s"} that could not be matched to a retrieved judgment: ${Array.from(unknownIds, (id) => `[Source ${id}]`).join(", ")}. These references are not linked.`;
       citationWarning.hidden = false;
     }
 
@@ -152,7 +171,7 @@
     }
   }
 
-  function renderAnswer(answer, sourceIds, unknownIds) {
+  function renderAnswer(answer, sourcesById, unknownIds) {
     answerText.replaceChildren();
     if (!answer) {
       const empty = document.createElement("p");
@@ -162,18 +181,54 @@
       return;
     }
 
+    const lines = answer.split(/\r?\n/);
+    let index = 0;
     let paragraph = [];
     let list = null;
     const flushParagraph = () => {
       if (!paragraph.length) return;
+      const text = paragraph.join(" ");
       const block = document.createElement("p");
-      appendInline(block, paragraph.join(" "), sourceIds, unknownIds);
+      appendInline(block, text, sourcesById, unknownIds);
       answerText.append(block);
       paragraph = [];
     };
     const flushList = () => { list = null; };
 
-    for (const line of answer.split(/\r?\n/)) {
+    while (index < lines.length) {
+      const line = lines[index];
+      const separatorIndex = findTableSeparator(lines, index);
+      if (separatorIndex >= 0) {
+        flushParagraph();
+        flushList();
+        const tableLines = [lines[index], lines[separatorIndex]];
+        let next = separatorIndex + 1;
+        while (next < lines.length) {
+          if (lines[next].includes("|")) {
+            tableLines.push(lines[next]);
+            next += 1;
+          } else if (!lines[next].trim() && next + 1 < lines.length
+            && lines[next + 1].includes("|")) {
+            next += 1;
+          } else {
+            break;
+          }
+        }
+        renderStackedTable(tableLines, sourcesById, unknownIds);
+        index = next;
+        continue;
+      }
+      const headingMatch = line.match(/^\s*(#{1,3})\s+(.+)$/);
+      if (headingMatch) {
+        flushParagraph();
+        flushList();
+        const heading = document.createElement(`h${headingMatch[1].length + 1}`);
+        heading.className = "answer-title";
+        appendInline(heading, headingMatch[2], sourcesById, unknownIds);
+        answerText.append(heading);
+        index += 1;
+        continue;
+      }
       const itemMatch = line.match(/^\s*(?:[-*]\s+|\d+[.)]\s+)(.*)$/);
       if (itemMatch) {
         flushParagraph();
@@ -184,7 +239,7 @@
           answerText.append(list);
         }
         const item = document.createElement("li");
-        appendInline(item, itemMatch[1], sourceIds, unknownIds);
+        appendInline(item, itemMatch[1], sourcesById, unknownIds);
         list.append(item);
       } else if (!line.trim()) {
         flushParagraph();
@@ -193,29 +248,100 @@
         flushList();
         paragraph.push(line.trim());
       }
+      index += 1;
     }
     flushParagraph();
   }
 
-  function appendInline(parent, text, sourceIds, unknownIds) {
-    const tokens = /\[\s*Source\s+(\d+)(?:\s*:[^\]]*)?\s*\]|\*\*([^*]+)\*\*/gi;
+  function findTableSeparator(lines, index) {
+    if (!lines[index].includes("|")) return -1;
+    let separator = index + 1;
+    while (separator < lines.length && !lines[separator].trim()) separator += 1;
+    if (separator >= lines.length || !lines[separator].includes("|")) return -1;
+    const cells = splitTableRow(lines[separator]);
+    return cells.length > 0 && cells.every((cell) => /^\s*:?-{3,}:?\s*$/.test(cell))
+      ? separator
+      : -1;
+  }
+
+  function splitTableRow(line) {
+    const escapedPipe = "\u0000";
+    return line.trim().replace(/\\\|/g, escapedPipe).replace(/^\|/, "").replace(/\|$/, "")
+      .split("|").map((cell) => cell.replaceAll(escapedPipe, "|").trim());
+  }
+
+  function renderStackedTable(tableLines, sourcesById, unknownIds) {
+    const headers = splitTableRow(tableLines[0]);
+    const normalizedHeaders = headers.map((header) => header.replace(/\*\*/g, "").trim());
+    const principleIndex = normalizedHeaders.findIndex((header) => /^(?:legal\s+)?(?:principle|factor|consideration|issue|topic|ground|circumstance|category)s?$/i.test(header));
+    const sourceIndex = normalizedHeaders.findIndex((header) => /^(?:sources?|citations?|references?)(?:\s*\(.*\))?$/i.test(header));
+    const headingIndex = principleIndex >= 0 ? principleIndex : 0;
+    const explanationIndices = headers.map((_, i) => i)
+      .filter((i) => i !== headingIndex && i !== sourceIndex);
+
+    let rowNumber = 0;
+    for (const rowLine of tableLines.slice(2)) {
+      const cells = splitTableRow(rowLine);
+      if (!cells.some(Boolean)) continue;
+      const section = document.createElement("section");
+      section.className = "principle-section";
+      rowNumber += 1;
+      const headingText = cells[headingIndex] || `Principle ${rowNumber}`;
+      const heading = document.createElement("h3");
+      heading.className = "principle-heading";
+      appendInline(heading, headingText, sourcesById, unknownIds);
+      section.append(heading);
+
+      for (const cellIndex of explanationIndices) {
+        const value = cells[cellIndex] || "";
+        if (!value) continue;
+        const header = normalizedHeaders[cellIndex] || "";
+        const explanation = document.createElement("p");
+        explanation.className = "principle-explanation";
+        if (header && !/^(explanation|description|details?|reason)$/i.test(header)) {
+          const label = document.createElement("strong");
+          appendInline(label, `${headers[cellIndex]}: `, sourcesById, unknownIds);
+          explanation.append(label);
+        }
+        appendInline(explanation, value, sourcesById, unknownIds);
+        section.append(explanation);
+      }
+
+      if (sourceIndex >= 0 && cells[sourceIndex]) {
+        const sourceLine = document.createElement("p");
+        sourceLine.className = "principle-source";
+        const label = document.createElement("strong");
+        label.textContent = "Source: ";
+        sourceLine.append(label);
+        appendTableSource(sourceLine, cells[sourceIndex], sourcesById, unknownIds);
+        section.append(sourceLine);
+      }
+      answerText.append(section);
+    }
+  }
+
+  function appendTableSource(parent, text, sourcesById, unknownIds) {
+    const sourceToken = /\[?\s*Source\s+(\d+)(?:\s*:[^\]]*)?\s*\]?/gi;
+    let previous = 0;
+    for (const match of text.matchAll(sourceToken)) {
+      parent.append(document.createTextNode(text.slice(previous, match.index)));
+      appendCitation(parent, match[0], match[1], sourcesById, unknownIds, true);
+      previous = match.index + match[0].length;
+    }
+    parent.append(document.createTextNode(text.slice(previous)));
+  }
+
+  function appendInline(parent, text, sourcesById, unknownIds) {
+    const tokens = /(\[\s*Source\s+\d+(?:\s*:[^\]]*)?\s*\]|\bSources?\s+\d+(?:\s*(?:,|and|&)\s*\d+)*)|\*\*([^*]+)\*\*/gi;
     let previous = 0;
     for (const match of text.matchAll(tokens)) {
       parent.append(document.createTextNode(text.slice(previous, match.index)));
       if (match[1]) {
-        const sourceId = match[1];
-        if (sourceIds.has(sourceId) && !unknownIds.has(sourceId)) {
-          const link = document.createElement("a");
-          link.className = "inline-citation";
-          link.href = `#source-${sourceId}`;
-          link.textContent = match[0];
-          link.setAttribute("aria-label", `Jump to supporting judgment ${sourceId}`);
-          parent.append(link);
+        if (match[1].startsWith("[")) {
+          const sourceId = match[1].match(/\d+/)[0];
+          appendCitation(parent, match[1], sourceId, sourcesById, unknownIds, false);
         } else {
-          const unresolved = document.createElement("span");
-          unresolved.className = "unresolved-citation";
-          unresolved.textContent = match[0];
-          parent.append(unresolved);
+          appendCitationGroup(parent, match[1], sourcesById, unknownIds);
         }
       } else {
         const strong = document.createElement("strong");
@@ -225,6 +351,50 @@
       previous = match.index + match[0].length;
     }
     parent.append(document.createTextNode(text.slice(previous)));
+  }
+
+  function appendCitationGroup(parent, text, sourcesById, unknownIds) {
+    let previous = 0;
+    let index = 0;
+    for (const match of text.matchAll(/\d+/g)) {
+      let before = text.slice(previous, match.index);
+      if (index === 0) before = before.replace(/^Sources?\s+/i, "");
+      parent.append(document.createTextNode(before));
+      const sourceId = match[0];
+      appendCitation(parent, `Source ${sourceId}`, sourceId, sourcesById, unknownIds, false);
+      previous = match.index + match[0].length;
+      index += 1;
+    }
+    parent.append(document.createTextNode(text.slice(previous)));
+  }
+
+  function appendCitation(parent, originalText, sourceId, sourcesById, unknownIds, tableSource) {
+    const source = sourcesById.get(sourceId);
+    if (!source || unknownIds.has(sourceId)) {
+      if (!source) unknownIds.add(sourceId);
+      const unresolved = document.createElement("span");
+      unresolved.className = "unresolved-citation";
+      unresolved.textContent = originalText;
+      parent.append(unresolved);
+      return;
+    }
+    if (!source.safeUrl) {
+      const unavailable = document.createElement("span");
+      unavailable.className = "citation-unavailable";
+      unavailable.textContent = `${originalText} (original link unavailable)`;
+      parent.append(unavailable);
+      return;
+    }
+    const link = document.createElement("a");
+    link.className = "inline-citation";
+    link.href = source.safeUrl;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = tableSource
+      ? `[Source ${sourceId} — Open original judgment ↗]`
+      : `${originalText} ↗`;
+    link.setAttribute("aria-label", `Open original judgment for source ${sourceId}`);
+    parent.append(link);
   }
 
   function renderDiagnostics(scores, metadata, sourceItems) {
@@ -242,8 +412,15 @@
     if (metadata && hasValue(metadata.chunks_retrieved)) {
       items.push(["Chunks retrieved", String(metadata.chunks_retrieved)]);
     }
-    if (metadata && typeof metadata.self_healed === "boolean") {
-      items.push(["Retrieval recovery", metadata.self_healed ? "Recovered" : "Not triggered"]);
+    if (metadata && typeof metadata.retry_attempted === "boolean") {
+      const retryStatus = !metadata.retry_attempted
+        ? "Not attempted"
+        : metadata.retry_succeeded
+          ? (metadata.self_healed ? "Recovered" : "Attempted; recovery threshold not met")
+          : "Attempted; retrieval failed";
+      items.push(["Retrieval retry", retryStatus]);
+    } else if (metadata && typeof metadata.self_healed === "boolean") {
+      items.push(["Retrieval recovery", metadata.self_healed ? "Recovered" : "Not reported"]);
     }
     if (metadata && hasValue(metadata.model)) items.push(["Model", String(metadata.model)]);
     if (metadata && typeof metadata.rewrite_attempted === "boolean") {
@@ -254,6 +431,30 @@
     }
     if (metadata && typeof metadata.reference_recovered === "boolean") {
       items.push(["Statutory reference recovered", metadata.reference_recovered ? "Yes" : "No"]);
+    }
+    const timingLabels = {
+      initial_retrieval_ms: "Initial retrieval",
+      initial_dense_retrieval_ms: "Initial dense retrieval",
+      initial_sparse_retrieval_ms: "Initial BM25 retrieval",
+      initial_rrf_fusion_ms: "Initial RRF fusion",
+      initial_cross_encoder_reranking_ms: "Initial reranking",
+      query_rewriting_ms: "Query rewriting",
+      retry_retrieval_ms: "Retry retrieval",
+      retry_dense_retrieval_ms: "Retry dense retrieval",
+      retry_sparse_retrieval_ms: "Retry BM25 retrieval",
+      retry_rrf_fusion_ms: "Retry RRF fusion",
+      retry_cross_encoder_reranking_ms: "Retry reranking",
+      answer_generation_ms: "Answer generation",
+      faithfulness_check_ms: "Faithfulness check",
+      total_pipeline_ms: "RAG pipeline total",
+    };
+    if (metadata && metadata.timings_ms && typeof metadata.timings_ms === "object") {
+      for (const [key, label] of Object.entries(timingLabels)) {
+        const value = metadata.timings_ms[key];
+        if (hasValue(value) && Number.isFinite(Number(value))) {
+          items.push([label, `${Number(value).toLocaleString()} ms`]);
+        }
+      }
     }
     for (const source of sourceItems) {
       if (!source || !hasValue(source.relevance_score) || !/^\d+$/.test(String(source.source_id || ""))) continue;

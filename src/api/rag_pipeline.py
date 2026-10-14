@@ -2,6 +2,8 @@ import os
 import logging
 import json
 import re
+import time
+from urllib.parse import urlsplit, urlunsplit
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -431,6 +433,40 @@ def validate_source_references(answer: str, sources: list[dict]) -> dict:
     }
 
 
+def _bounded_chunk_diagnostics(chunks: list[dict], excerpt_limit: int = 240) -> list[dict]:
+    """Return only bounded, non-secret retrieval provenance for debug logging."""
+    records = []
+    for chunk in chunks:
+        meta = chunk.get("metadata") or {}
+        raw_url = meta.get("doc_url")
+        normalized_url = ""
+        if isinstance(raw_url, str) and raw_url.strip():
+            try:
+                parsed = urlsplit(raw_url.strip())
+                host = parsed.hostname or ""
+                if ":" in host and not host.startswith("["):
+                    host = f"[{host}]"
+                if parsed.port:
+                    host = f"{host}:{parsed.port}"
+                normalized_url = urlunsplit((
+                    parsed.scheme.lower(), host.lower(),
+                    parsed.path.rstrip("/"), "", "",
+                ))
+            except ValueError:
+                normalized_url = ""
+        text = chunk.get("text")
+        excerpt = " ".join(text.split())[:excerpt_limit] if isinstance(text, str) else ""
+        records.append({
+            "chunk_id": meta.get("chunk_id"),
+            "judgment_title": str(meta.get("judgment_title") or "")[:200],
+            "document_url": normalized_url[:500],
+            "case_type": meta.get("case_type"),
+            "rerank_score": chunk.get("rerank_score"),
+            "excerpt": excerpt,
+        })
+    return records
+
+
 def rag_query(
     query: str,
     retriever: HybridRetriever,
@@ -452,6 +488,7 @@ def rag_query(
 
     This is the function your FastAPI endpoint calls.
     """
+    pipeline_started = time.perf_counter()
     logger.info(f"Processing query: {query[:80]}")
 
     # step 1 — classify intent
@@ -470,6 +507,11 @@ def rag_query(
         "reference_recovered": False,
         "fallback_error": None,
     }
+    reset_timings = getattr(retriever, "reset_stage_timings", None)
+    get_timings = getattr(retriever, "get_stage_timings", None)
+    if callable(reset_timings):
+        reset_timings()
+    initial_retrieval_started = time.perf_counter()
     reference_retrieval = getattr(
         type(retriever), "retrieve_with_reference_fallback", None
     )
@@ -483,6 +525,8 @@ def rag_query(
             fallback_case_type=filter_case_type,
             filter_court_type=intent["court_type"],
         )
+        retrieval_diagnostics.setdefault("initial_chunks", chunks)
+        retrieval_diagnostics.setdefault("final_chunks", chunks)
     else:
         chunks = retriever.retrieve(
             query=query,
@@ -495,6 +539,16 @@ def rag_query(
         ]
         retrieval_diagnostics["final_chunk_ids"] = list(
             retrieval_diagnostics["initial_chunk_ids"]
+        )
+        retrieval_diagnostics["initial_chunks"] = list(chunks)
+        retrieval_diagnostics["final_chunks"] = list(chunks)
+
+    initial_retrieval_ms = (time.perf_counter() - initial_retrieval_started) * 1000
+    initial_stages = get_timings() if callable(get_timings) else {}
+    if retrieval_diagnostics.get("initial_timings") is not None:
+        initial_stages = retrieval_diagnostics["initial_timings"]
+        initial_retrieval_ms = retrieval_diagnostics.get(
+            "initial_retrieval_ms", initial_retrieval_ms,
         )
 
     # step 3 — score relevance
@@ -510,11 +564,20 @@ def rag_query(
     retry_failed = False
     healed = False
     fallback_activated = retrieval_diagnostics.get("fallback_activated", False)
+    rewritten_query = None
+    rewrite_query_ms = 0.0
+    retry_retrieval_ms = 0.0
+    retry_stages = {}
+    retry_filter_case_type = None
     if fallback_activated:
         # The reference fallback consumes the single recovery/retry budget.
+        # retry_succeeded means retrieval completed without an exception;
+        # self_healed separately requires the reference to be recovered.
         retry_attempted = True
         retry_failed = bool(retrieval_diagnostics.get("fallback_error"))
         retry_succeeded = not retry_failed
+        retry_retrieval_ms = retrieval_diagnostics.get("fallback_retrieval_ms", 0.0)
+        retry_stages = retrieval_diagnostics.get("fallback_timings", {})
     if relevance_score < RELEVANCE_THRESHOLD and not fallback_activated:
         logger.warning(
             f"Low relevance ({relevance_score:.3f}) — triggering self-heal"
@@ -523,6 +586,7 @@ def rag_query(
         # rewrite query
         rewrite_attempted = True
         retry_query = query
+        rewrite_started = time.perf_counter()
         try:
             rewritten_query = rewrite_query(query, "")
             rewrite_succeeded = True
@@ -533,9 +597,15 @@ def rag_query(
                 "Query rewrite failed (%s); retrying the original query with "
                 "the broader filter.", type(exc).__name__,
             )
+        finally:
+            rewrite_query_ms = (time.perf_counter() - rewrite_started) * 1000
 
         # Retry once. A rewrite failure falls back to the original query.
         retry_attempted = True
+        retry_filter_case_type = filter_case_type
+        if callable(reset_timings):
+            reset_timings()
+        retry_started = time.perf_counter()
         try:
             chunks = retriever.retrieve(
                 query=retry_query,
@@ -545,6 +615,8 @@ def rag_query(
             )
         except Exception as exc:
             retry_failed = True
+            retry_retrieval_ms = (time.perf_counter() - retry_started) * 1000
+            retry_stages = get_timings() if callable(get_timings) else {}
             raise RAGGenerationError(
                 "Retry retrieval", relevance_score, False, exc,
                 rewrite_attempted=rewrite_attempted,
@@ -556,6 +628,10 @@ def rag_query(
                 retrieval_diagnostics=retrieval_diagnostics,
             ) from exc
 
+        retry_retrieval_ms = (time.perf_counter() - retry_started) * 1000
+        retry_stages = get_timings() if callable(get_timings) else {}
+
+        # A successful retrieval call is not itself a successful recovery.
         retry_succeeded = True
         retrieval_diagnostics["final_chunk_ids"] = [
             c.get("metadata", {}).get("chunk_id") for c in chunks
@@ -575,9 +651,12 @@ def rag_query(
         )
 
     # step 5 — generate answer
+    answer_generation_ms = 0.0
+    generation_started = time.perf_counter()
     try:
         answer = generate_answer(query, chunks, intent)
     except Exception as exc:
+        answer_generation_ms = (time.perf_counter() - generation_started) * 1000
         raise RAGGenerationError(
             "Answer generation", relevance_score, False, exc,
             rewrite_attempted=rewrite_attempted,
@@ -588,12 +667,15 @@ def rag_query(
             retry_failed=retry_failed,
             retrieval_diagnostics=retrieval_diagnostics,
         ) from exc
+    answer_generation_ms = (time.perf_counter() - generation_started) * 1000
 
     # Recovery requires adequate retry relevance and a completed answer.
     healed = recovery_candidate
 
     # step 6 — score faithfulness
+    faithfulness_started = time.perf_counter()
     faithfulness_score = score_faithfulness(answer, chunks)
+    faithfulness_check_ms = (time.perf_counter() - faithfulness_started) * 1000
     logger.info(f"Faithfulness score: {faithfulness_score:.3f}")
 
     # Use the same judgment-level IDs and identity rules as the prompt.
@@ -606,6 +688,58 @@ def rag_query(
         for source in grouped_sources
     ]
     citation_validation = validate_source_references(answer, sources)
+
+    initial_chunks = retrieval_diagnostics.get("initial_chunks") or []
+    final_chunks = retrieval_diagnostics.get("final_chunks") or chunks
+    if retry_attempted and not fallback_activated:
+        final_chunks = chunks
+    initial_filter_status = (
+        "retained_explicit" if filter_case_type else
+        "applied_inferred" if requested_case_type else "not_applied"
+    )
+    retry_filter_status = "not_attempted"
+    if fallback_activated:
+        retry_filter_case_type = filter_case_type
+        retry_filter_status = (
+            "retained_explicit" if filter_case_type else "removed_inferred"
+        )
+    elif retry_attempted:
+        retry_filter_status = (
+            "retained_explicit" if filter_case_type else "removed_inferred"
+        )
+    timing_fields = {
+        "initial_retrieval_ms": round(initial_retrieval_ms, 3),
+        "initial_dense_retrieval_ms": round(initial_stages.get("dense_retrieval_ms", 0.0), 3),
+        "initial_sparse_retrieval_ms": round(initial_stages.get("sparse_retrieval_ms", 0.0), 3),
+        "initial_rrf_fusion_ms": round(initial_stages.get("rrf_fusion_ms", 0.0), 3),
+        "initial_cross_encoder_reranking_ms": round(initial_stages.get("cross_encoder_reranking_ms", 0.0), 3),
+        "query_rewriting_ms": round(rewrite_query_ms, 3),
+        "retry_retrieval_ms": round(retry_retrieval_ms, 3),
+        "retry_dense_retrieval_ms": round(retry_stages.get("dense_retrieval_ms", 0.0), 3),
+        "retry_sparse_retrieval_ms": round(retry_stages.get("sparse_retrieval_ms", 0.0), 3),
+        "retry_rrf_fusion_ms": round(retry_stages.get("rrf_fusion_ms", 0.0), 3),
+        "retry_cross_encoder_reranking_ms": round(retry_stages.get("cross_encoder_reranking_ms", 0.0), 3),
+        "answer_generation_ms": round(answer_generation_ms, 3),
+        "faithfulness_check_ms": round(faithfulness_check_ms, 3),
+        "total_pipeline_ms": round((time.perf_counter() - pipeline_started) * 1000, 3),
+    }
+    trace = {
+        "initial_chunks": _bounded_chunk_diagnostics(initial_chunks),
+        "final_chunks": _bounded_chunk_diagnostics(final_chunks),
+        "case_type_filter": {
+            "initial_status": initial_filter_status,
+            "initial_value": requested_case_type,
+            "retry_status": retry_filter_status,
+            "retry_value": retry_filter_case_type,
+        },
+        "retry_attempted": retry_attempted,
+        "retry_succeeded": retry_succeeded,
+        "self_healed": healed,
+        "rewritten_query": rewritten_query,
+        "timings_ms": timing_fields,
+    }
+    if os.getenv("RAG_DIAGNOSTICS", "").strip().lower() in {"1", "true", "yes"}:
+        logger.info("rag_diagnostics=%s", json.dumps(trace, ensure_ascii=False))
 
     return {
         "query": query,
@@ -633,7 +767,10 @@ def rag_query(
             "reference_recovered": retrieval_diagnostics.get("reference_recovered", False),
             "fallback_error": retrieval_diagnostics.get("fallback_error"),
             "chunks_retrieved": len(chunks),
-            "model": LLM_MODEL
+            "model": LLM_MODEL,
+            "retry_attempted": retry_attempted,
+            "retry_succeeded": retry_succeeded,
+            "timings_ms": timing_fields,
         },
         "warning": (
             "; ".join(filter(None, [
