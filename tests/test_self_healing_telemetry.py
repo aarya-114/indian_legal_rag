@@ -26,6 +26,7 @@ sys.modules.setdefault("src.retrieval.hybrid_retriever", retrieval)
 os.environ["GROQ_API_KEY"] = "test-key"
 os.environ["LLM_REQUEST_TIMEOUT_SECONDS"] = "37"
 os.environ["LLM_MAX_OUTPUT_TOKENS"] = "900"
+os.environ["LLM_MAX_REWRITE_TOKENS"] = "1800"
 os.environ.setdefault("LLM_MODEL", "test-model")
 
 from src.api import rag_pipeline
@@ -107,6 +108,7 @@ class SelfHealingTelemetryTests(unittest.TestCase):
         request = client.chat.completions.create.call_args.kwargs
         self.assertEqual(request["model"], rag_pipeline.LLM_MODEL)
         self.assertEqual(rag_pipeline.LLM_MAX_OUTPUT_TOKENS, 900)
+        self.assertEqual(rag_pipeline.LLM_MAX_REWRITE_TOKENS, 1800)
         self.assertEqual(
             request["max_completion_tokens"],
             rag_pipeline.LLM_MAX_OUTPUT_TOKENS,
@@ -180,7 +182,9 @@ class SelfHealingTelemetryTests(unittest.TestCase):
         self.assertEqual(rewritten, "anticipatory bail")
         request = client.chat.completions.create.call_args.kwargs
         self.assertEqual(request["model"], rag_pipeline.LLM_MODEL)
-        self.assertEqual(request["max_completion_tokens"], 512)
+        self.assertEqual(
+            request["max_completion_tokens"], rag_pipeline.LLM_MAX_REWRITE_TOKENS,
+        )
         self.assertEqual(request["reasoning_effort"], "low")
         self.assertIn("at most 20 words", request["messages"][0]["content"])
 
@@ -248,6 +252,33 @@ class SelfHealingTelemetryTests(unittest.TestCase):
                     ) as caught:
                         rag_pipeline.rewrite_query("anticipatory bail", "")
                 self.assertNotIn("OpenRouter", str(caught.exception))
+
+    def test_answer_empty_or_truncated_response_is_never_successful(self):
+        source_chunk = chunk(1)
+        cases = [
+            (None, "stop", "contained no assistant text"),
+            ("partial answer", "length", "truncated at the token limit"),
+        ]
+        for content, finish_reason, message in cases:
+            with self.subTest(content=content, finish_reason=finish_reason):
+                response = types.SimpleNamespace(
+                    id="answer-invalid",
+                    choices=[types.SimpleNamespace(
+                        message=types.SimpleNamespace(content=content, refusal=None),
+                        finish_reason=finish_reason,
+                    )],
+                )
+                client = types.SimpleNamespace(
+                    chat=types.SimpleNamespace(
+                        completions=types.SimpleNamespace(create=Mock(return_value=response)),
+                    ),
+                )
+                with patch.object(rag_pipeline, "groq_client", client):
+                    with self.assertRaisesRegex(rag_pipeline.LLMResponseError, message):
+                        rag_pipeline.generate_answer(
+                            "A legal question", [source_chunk],
+                            {"detected_intent": "General"},
+                        )
 
     def test_invalid_rewrite_is_rejected(self):
         for content in (

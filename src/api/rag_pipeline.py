@@ -25,11 +25,18 @@ if not LLM_REQUEST_TIMEOUT_SECONDS > 0 or LLM_REQUEST_TIMEOUT_SECONDS == float("
     raise RuntimeError("LLM_REQUEST_TIMEOUT_SECONDS must be a positive number.")
 
 try:
-    LLM_MAX_OUTPUT_TOKENS = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "1536"))
+    LLM_MAX_OUTPUT_TOKENS = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "4096"))
 except ValueError as exc:
     raise RuntimeError("LLM_MAX_OUTPUT_TOKENS must be a positive integer.") from exc
 if LLM_MAX_OUTPUT_TOKENS <= 0:
     raise RuntimeError("LLM_MAX_OUTPUT_TOKENS must be a positive integer.")
+
+try:
+    LLM_MAX_REWRITE_TOKENS = int(os.getenv("LLM_MAX_REWRITE_TOKENS", "2048"))
+except ValueError as exc:
+    raise RuntimeError("LLM_MAX_REWRITE_TOKENS must be a positive integer.") from exc
+if LLM_MAX_REWRITE_TOKENS <= 0:
+    raise RuntimeError("LLM_MAX_REWRITE_TOKENS must be a positive integer.")
 
 groq_client = OpenAI(
     api_key=os.getenv("GROQ_API_KEY"),
@@ -265,7 +272,7 @@ Original query: {query}"""
     response = groq_client.chat.completions.create(
         model=LLM_MODEL,
         messages=[{"role": "user", "content": prompt}],
-        max_completion_tokens=512,
+        max_completion_tokens=LLM_MAX_REWRITE_TOKENS,
         temperature=0,
         reasoning_effort="low",
     )
